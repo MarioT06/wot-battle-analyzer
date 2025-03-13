@@ -3,7 +3,7 @@ services:
     name: wot-battle-analyzer
     env: python
     buildCommand: chmod +x build.sh && ./build.sh && pip install -r requirements.txt
-    startCommand: gunicorn --worker-class eventlet -w 1 'app:app'
+    startCommand: gunicorn --config gunicorn.conf.py app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.0
@@ -13,4 +13,6 @@ services:
         value: /opt/render/project/src/chrome/chrome-linux/chrome
       - key: PYTHONUNBUFFERED
         value: "true"
+      - key: PORT
+        value: "10000"
     autoDeploy: true 
