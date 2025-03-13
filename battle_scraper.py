@@ -10,10 +10,32 @@ import time
 import logging
 import os
 from collections import defaultdict
+import concurrent.futures
+import random
+from concurrent.futures import ThreadPoolExecutor
+import queue
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Global rate limiting queue
+request_queue = queue.Queue()
+MAX_REQUESTS_PER_MINUTE = 30  # Adjust this based on the website's limits
+DELAY_BETWEEN_REQUESTS = 60 / MAX_REQUESTS_PER_MINUTE  # Time between requests in seconds
+
+def rate_limit():
+    """Implement rate limiting for requests"""
+    try:
+        request_queue.put_nowait(time.time())
+        if request_queue.qsize() > MAX_REQUESTS_PER_MINUTE:
+            oldest_request = request_queue.get()
+            time_since_oldest = time.time() - oldest_request
+            if time_since_oldest < 60:  # If less than a minute has passed
+                sleep_time = 60 - time_since_oldest
+                time.sleep(sleep_time)
+    except queue.Full:
+        time.sleep(DELAY_BETWEEN_REQUESTS)
 
 def setup_driver():
     logger.info("Setting up Chrome driver...")
@@ -114,11 +136,20 @@ def setup_driver():
 def extract_battle_data(driver, battle_url):
     logger.info(f"Accessing battle page: {battle_url}")
     try:
+        # Apply rate limiting
+        rate_limit()
+        
         driver.get(battle_url)
         
-        # Wait for page to load
-        logger.info("Waiting for page to load...")
-        time.sleep(15)
+        # Wait for page to load dynamically
+        wait = WebDriverWait(driver, 30)
+        
+        # Wait for either victory or defeat element
+        result_xpath = "//div[@result='win'] | //div[@result='loss']"
+        wait.until(EC.presence_of_element_located((By.XPATH, result_xpath)))
+        
+        # Add a small random delay to simulate human behavior
+        time.sleep(random.uniform(1, 3))
         
         # Try to find the battle result div using XPath to find div with result attribute
         result_selectors = [
@@ -604,8 +635,29 @@ def save_averages_to_excel(averages_data, output_file, battle_summary=None):
         logger.error(f"Error saving Excel file: {str(e)}")
         raise
 
+def process_battle_chunk(battle_urls_chunk):
+    """Process a chunk of battle URLs with its own Chrome instance"""
+    driver = setup_driver()
+    chunk_data = []
+    chunk_victories = 0
+    chunk_defeats = 0
+    
+    try:
+        for url in battle_urls_chunk:
+            is_victory, battle_data = extract_battle_data(driver, url)
+            if battle_data:
+                chunk_data.append(battle_data)
+                if is_victory is not None:
+                    if is_victory:
+                        chunk_victories += 1
+                    else:
+                        chunk_defeats += 1
+    finally:
+        driver.quit()
+    
+    return chunk_data, chunk_victories, chunk_defeats
+
 def main():
-    # List of battle URLs to process (reduced to 5 for testing)
     battle_urls = [
         "https://tomato.gg/battle/69523015319287012/512317641",
         "https://tomato.gg/battle/81469217745007248/512317641",
@@ -629,45 +681,49 @@ def main():
         "https://tomato.gg/battle/64391779236043210/512317641"
     ]
     
-    driver = setup_driver()
-    all_battles_data = []
-    global victories, defeats
-    victories = 0
-    defeats = 0
+    # Calculate optimal number of threads based on CPU cores and memory
+    max_threads = min(os.cpu_count() or 1, 4)  # Limit to 4 threads to avoid overwhelming the system
+    chunk_size = max(1, len(battle_urls) // max_threads)
     
-    try:
-        # Process each battle URL
-        for i, url in enumerate(battle_urls, 1):
-            logger.info(f"\nProcessing battle {i} of {len(battle_urls)}")
-            is_victory, battle_data = extract_battle_data(driver, url)
-            if battle_data:
-                all_battles_data.append(battle_data)
-                if is_victory is not None:
-                    if is_victory:
-                        victories += 1
-                    else:
-                        defeats += 1
-            
-        logger.info(f"Successfully extracted battle data from {len(all_battles_data)} out of {len(battle_urls)} battles")
-        logger.info(f"Total Victories: {victories}, Total Defeats: {defeats}")
-
-        if all_battles_data:
-            # Calculate and save averages to a single Excel file named "day 3.xlsx"
-            averages_data = calculate_averages(all_battles_data)
-            battle_summary = {
-                'total_battles': len(all_battles_data),
-                'victories': victories,
-                'defeats': defeats,
-                'win_rate': (victories / (victories + defeats) * 100) if victories + defeats > 0 else 0
-            }
-            save_averages_to_excel(averages_data, "day 3.xlsx", battle_summary)
-            logger.info("All battles processed successfully")
-        else:
-            logger.error("No battle data was extracted from any battle")
-            
-    finally:
-        driver.quit()
-        logger.info("Browser closed")
+    # Split URLs into chunks
+    url_chunks = [battle_urls[i:i + chunk_size] for i in range(0, len(battle_urls), chunk_size)]
+    
+    all_battles_data = []
+    total_victories = 0
+    total_defeats = 0
+    
+    logger.info(f"Processing battles using {max_threads} threads")
+    
+    # Process chunks in parallel
+    with ThreadPoolExecutor(max_workers=max_threads) as executor:
+        futures = [executor.submit(process_battle_chunk, chunk) for chunk in url_chunks]
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                chunk_data, chunk_victories, chunk_defeats = future.result()
+                all_battles_data.extend(chunk_data)
+                total_victories += chunk_victories
+                total_defeats += chunk_defeats
+            except Exception as e:
+                logger.error(f"Error processing chunk: {str(e)}")
+    
+    logger.info(f"Successfully extracted battle data from {len(all_battles_data)} out of {len(battle_urls)} battles")
+    logger.info(f"Total Victories: {total_victories}, Total Defeats: {total_defeats}")
+    
+    if all_battles_data:
+        # Calculate and save averages
+        averages_data = calculate_averages(all_battles_data)
+        battle_summary = {
+            'total_battles': len(all_battles_data),
+            'victories': total_victories,
+            'defeats': total_defeats,
+            'win_rate': (total_victories / (total_victories + total_defeats) * 100) if total_victories + total_defeats > 0 else 0
+        }
+        save_averages_to_excel(averages_data, "day 3.xlsx", battle_summary)
+        logger.info("All battles processed successfully")
+    else:
+        logger.error("No battle data was extracted from any battle")
 
 if __name__ == "__main__":
     main()
