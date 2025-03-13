@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WoT Battle Stats Analyzer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .battle-card {
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        .battle-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .progress {
+            height: 25px;
+        }
+        #urlInput {
+            min-height: 150px;
+        }
+        .stats-table {
+            margin-top: 20px;
+            font-size: 0.9em;
+        }
+        .victory {
+            color: #198754;
+            font-weight: bold;
+        }
+        .defeat {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .nav-tabs {
+            margin-bottom: 20px;
+        }
+        th {
+            cursor: pointer;
+        }
+        th:hover {
+            background-color: #f0f0f0;
+        }
+        .download-buttons {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        .tank-list {
+            position: relative;
+            cursor: pointer;
+        }
+        .tank-preview {
+            display: inline-block;
+        }
+        .tank-count {
+            display: inline-block;
+            color: #666;
+            margin-left: 5px;
+        }
+        .tank-popup {
+            display: none;
+            position: absolute;
+            background: white;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 1000;
+            max-width: 300px;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: nowrap;
+            left: 0;
+            top: 100%;
+        }
+        .tank-list:hover .tank-popup {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">WoT Battle Stats Analyzer</h1>
+        
+        <!-- Input Section -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Battle URLs</h5>
+                <textarea id="urlInput" class="form-control mb-3" placeholder="Paste your battle URLs here (one per line)"></textarea>
+                <button id="processButton" class="btn btn-primary" onclick="processBattles()">Process Battles</button>
+            </div>
+        </div>
+
+        <!-- Progress Section -->
+        <div id="progressSection" class="card mb-4 d-none">
+            <div class="card-body">
+                <h5 class="card-title">Processing Progress</h5>
+                <div class="progress mb-3">
+                    <div id="progressBar" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                </div>
+                <div id="currentBattle" class="text-muted"></div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="resultsSection" class="card mb-4 d-none">
+            <div class="card-body">
+                <ul class="nav nav-tabs" id="resultTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="battles-tab" data-bs-toggle="tab" data-bs-target="#battles" type="button" role="tab">Individual Battles</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="averages-tab" data-bs-toggle="tab" data-bs-target="#averages" type="button" role="tab">Average Stats</button>
+                    </li>
+                </ul>
+
+                <div class="tab-content" id="resultTabsContent">
+                    <!-- Individual Battles Tab -->
+                    <div class="tab-pane fade show active" id="battles" role="tabpanel">
+                        <div id="battlesList"></div>
+                    </div>
+
+                    <!-- Average Stats Tab -->
+                    <div class="tab-pane fade" id="averages" role="tabpanel">
+                        <div id="averagesTable"></div>
+                        <div class="download-buttons">
+                            <a id="downloadAveragesLink" href="#" class="btn btn-success d-none">Download Average Stats (.xlsx)</a>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="summary" class="mt-4">
+                    <h6>Summary</h6>
+                    <div id="summaryStats"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
+    <script>
+        const socket = io();
+        let processedBattles = 0;
+        let totalBattles = 0;
+        let currentAverages = null;
+        let averagesTable = null;
+
+        // Add socket connection handlers
+        socket.on('connect', function() {
+            console.log('Connected to server');
+        });
+
+        socket.on('connect_error', function(error) {
+            console.error('Socket connection error:', error);
+            alert('Connection error. Please refresh the page.');
+        });
+
+        async function processBattles() {
+            const urlInput = document.getElementById('urlInput');
+            const urls = urlInput.value.split('\n').filter(url => url.trim());
+            
+            if (urls.length === 0) {
+                alert('Please enter at least one battle URL');
+                return;
+            }
+
+            console.log('Processing battles:', urls.length, 'URLs');
+
+            // Reset UI
+            document.getElementById('progressSection').classList.remove('d-none');
+            document.getElementById('resultsSection').classList.remove('d-none');
+            document.getElementById('battlesList').innerHTML = '';
+            document.getElementById('summaryStats').innerHTML = '';
+            document.getElementById('averagesTable').innerHTML = '';
+            document.getElementById('downloadAveragesLink').classList.add('d-none');
+            
+            if (averagesTable) {
+                averagesTable.destroy();
+                averagesTable = null;
+            }
+            
+            // Disable input
+            urlInput.disabled = true;
+            document.getElementById('processButton').disabled = true;
+
+            try {
+                // Send URLs to server
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ urls: urls })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Server returned error: ' + response.status);
+                }
+
+                const data = await response.json();
+                console.log('Server response:', data);
+                
+                totalBattles = urls.length;
+                processedBattles = 0;
+            } catch (error) {
+                console.error('Error processing battles:', error);
+                alert('Error processing battles: ' + error.message);
+                // Re-enable input on error
+                urlInput.disabled = false;
+                document.getElementById('processButton').disabled = false;
+            }
+        }
+
+        function createStatsTable(stats) {
+            return `
+                <table class="table table-sm stats-table">
+                    <thead>
+                        <tr>
+                            <th>Player</th>
+                            <th>Tank</th>
+                            <th>Damage</th>
+                            <th>Frags</th>
+                            <th>Assist</th>
+                            <th>Spots</th>
+                            <th>Accuracy</th>
+                            <th>Survival</th>
+                            <th>XP</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${stats.map(player => `
+                            <tr>
+                                <td>${player.Name}</td>
+                                <td>${player.Tank}</td>
+                                <td>${player.Damage}</td>
+                                <td>${player.Frags}</td>
+                                <td>${player.Assist}</td>
+                                <td>${player.Spots}</td>
+                                <td>${player.Accuracy}</td>
+                                <td>${player.Survival}</td>
+                                <td>${player.XP}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function createAveragesTable(averages) {
+            const table = document.createElement('table');
+            table.className = 'table table-striped table-hover';
+            table.id = 'averagesDataTable';
+            
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+                <tr>
+                    <th>Player</th>
+                    <th>Battles</th>
+                    <th>Avg Damage</th>
+                    <th>Avg Frags</th>
+                    <th>Avg Assist</th>
+                    <th>Avg Spots</th>
+                    <th>Hit Rate</th>
+                    <th>Pen Rate</th>
+                    <th>Avg Survival</th>
+                    <th>Avg XP</th>
+                    <th>Tanks Used</th>
+                    <th>Tank List</th>
+                </tr>
+            `;
+            
+            const tbody = document.createElement('tbody');
+            tbody.innerHTML = averages.map(player => {
+                const tanks = player['Tank List'].split(',').map(t => t.trim());
+                const tankDisplay = tanks.length > 3 
+                    ? `<div class="tank-list">
+                        <span class="tank-preview">${tanks.slice(0, 3).join(', ')}</span>
+                        <span class="tank-count">+${tanks.length - 3} more</span>
+                        <div class="tank-popup">${tanks.join('<br>')}</div>
+                       </div>`
+                    : player['Tank List'];
+                
+                return `
+                    <tr>
+                        <td>${player.Name}</td>
+                        <td>${player.Battles}</td>
+                        <td data-order="${player['Avg Damage']}">${player['Avg Damage']}</td>
+                        <td data-order="${player['Avg Frags']}">${player['Avg Frags']}</td>
+                        <td data-order="${player['Avg Assist']}">${player['Avg Assist']}</td>
+                        <td data-order="${player['Avg Spots']}">${player['Avg Spots']}</td>
+                        <td data-order="${parseFloat(player['Hit Rate'])}">${player['Hit Rate']}</td>
+                        <td data-order="${parseFloat(player['Pen Rate'])}">${player['Pen Rate']}</td>
+                        <td>${player['Avg Survival']}</td>
+                        <td data-order="${player['Avg XP']}">${player['Avg XP']}</td>
+                        <td>${player['Tanks Used']}</td>
+                        <td data-order="${player['Tank List']}">${tankDisplay}</td>
+                    </tr>
+                `;
+            }).join('');
+            
+            table.appendChild(thead);
+            table.appendChild(tbody);
+            return table;
+        }
+
+        socket.on('progress', function(data) {
+            const progressBar = document.getElementById('progressBar');
+            progressBar.style.width = data.percentage + '%';
+            progressBar.textContent = Math.round(data.percentage) + '%';
+            
+            document.getElementById('currentBattle').textContent = 
+                `Processing battle ${data.current} of ${data.total}: ${data.url}`;
+        });
+
+        socket.on('battle_processed', function(data) {
+            processedBattles++;
+            
+            const battlesList = document.getElementById('battlesList');
+            const resultClass = data.result === 'Victory' ? 'victory' : 'defeat';
+            
+            const battleCard = document.createElement('div');
+            battleCard.className = 'battle-card card';
+            battleCard.innerHTML = `
+                <div class="card-body">
+                    <h5 class="card-title ${resultClass}">${data.result}</h5>
+                    <p class="card-text">
+                        URL: <a href="${data.url}" target="_blank">${data.url}</a>
+                    </p>
+                    ${createStatsTable(data.stats)}
+                </div>
+            `;
+            
+            battlesList.appendChild(battleCard);
+        });
+
+        socket.on('processing_complete', function(data) {
+            // Enable input
+            document.getElementById('urlInput').disabled = false;
+            document.getElementById('processButton').disabled = false;
+            
+            // Update summary
+            const summaryStats = document.getElementById('summaryStats');
+            summaryStats.innerHTML = `
+                <div class="alert alert-info">
+                    <strong>Total Battles:</strong> ${data.total_battles}<br>
+                    <strong>Victories:</strong> <span class="victory">${data.victories}</span><br>
+                    <strong>Defeats:</strong> <span class="defeat">${data.defeats}</span><br>
+                    <strong>Win Rate:</strong> ${data.win_rate.toFixed(1)}%
+                </div>
+            `;
+            
+            // Store averages data
+            currentAverages = data.averages;
+            
+            // Create and display averages table
+            document.getElementById('averagesTable').innerHTML = '';
+            document.getElementById('averagesTable').appendChild(createAveragesTable(data.averages));
+            
+            // Initialize DataTable with sorting
+            if (averagesTable) {
+                averagesTable.destroy();
+            }
+            
+            averagesTable = $('#averagesDataTable').DataTable({
+                order: [[2, 'desc']], // Sort by Avg Damage by default
+                pageLength: 25,
+                dom: 'rt', // Only show table, no search or pagination
+                ordering: true,
+                columnDefs: [
+                    { 
+                        targets: [1, 2, 3, 4, 5, 9, 10],
+                        type: 'num'
+                    },
+                    { 
+                        targets: [6, 7],
+                        type: 'num'
+                    },
+                    {
+                        targets: 11, // Tank List column
+                        render: function(data, type, row) {
+                            if (type === 'display') {
+                                const tanks = data.split(',').map(t => t.trim());
+                                if (tanks.length > 3) {
+                                    return `<div class="tank-list">
+                                            <span class="tank-preview">${tanks.slice(0, 3).join(', ')}</span>
+                                            <span class="tank-count">+${tanks.length - 3} more</span>
+                                            <div class="tank-popup">${tanks.join('<br>')}</div>
+                                           </div>`;
+                                }
+                                return data;
+                            }
+                            return data;
+                        }
+                    }
+                ]
+            });
+            
+            // Update download links
+            const downloadAveragesLink = document.getElementById('downloadAveragesLink');
+            downloadAveragesLink.href = `/download_averages/${data.excel_file}`;
+            downloadAveragesLink.classList.remove('d-none');
+        });
+
+        socket.on('processing_error', function(data) {
+            alert('Error: ' + data.message);
+            document.getElementById('urlInput').disabled = false;
+            document.getElementById('processButton').disabled = false;
+        });
+    </script>
+</body>
+</html> 

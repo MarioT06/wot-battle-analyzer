@@ -42,6 +42,31 @@ def extract_battle_data(driver, battle_url):
         logger.info("Waiting for page to load...")
         time.sleep(15)
         
+        # Try to find the battle result div using XPath to find div with result attribute
+        result_selectors = [
+            "//div[@result='win']",  # Look for victory
+            "//div[@result='loss']"  # Look for defeat
+        ]
+        
+        is_victory = None
+        for selector in result_selectors:
+            try:
+                logger.info(f"Trying to find result div with selector: {selector}")
+                elements = driver.find_elements(By.XPATH, selector)
+                
+                if elements:
+                    logger.info(f"Found {len(elements)} result elements with selector {selector}")
+                    is_victory = 'win' in selector
+                    logger.info(f"Battle result: {'Victory' if is_victory else 'Defeat'}")
+                    break
+            except Exception as e:
+                logger.warning(f"Failed with result selector {selector}: {str(e)}")
+                continue
+        
+        if is_victory is None:
+            logger.warning("Could not find result div element")
+            return None, []
+        
         # Try different table selectors
         table_selectors = [
             "table",  # Try simplest first
@@ -72,7 +97,7 @@ def extract_battle_data(driver, battle_url):
         
         if not table:
             logger.error("Could not find any table")
-            return []
+            return None, []
         
         # Get all rows
         rows = table.find_elements(By.TAG_NAME, "tr")
@@ -80,7 +105,7 @@ def extract_battle_data(driver, battle_url):
         
         if len(rows) <= 1:
             logger.error("Not enough rows found in table")
-            return []
+            return None, []
         
         # Skip header row
         rows = rows[1:]
@@ -142,14 +167,15 @@ def extract_battle_data(driver, battle_url):
         
         if not battle_data:
             logger.error("No data was extracted from any row")
+            return None, []
         else:
             logger.info(f"Successfully extracted data from {len(battle_data)} rows")
         
-        return battle_data
+        return is_victory, battle_data
     
     except Exception as e:
         logger.error(f"Error accessing battle page: {str(e)}")
-        return []
+        return None, []
 
 def save_to_excel(data, filename):
     if not data:
@@ -303,6 +329,7 @@ def calculate_averages(all_battles_data):
         for player in battle_data:
             name = player['Name']
             player_stats[name]['battles'] += 1
+            
             player_stats[name]['total_damage'] += int(player['Damage'])
             player_stats[name]['total_frags'] += int(player['Frags'])
             player_stats[name]['total_assist'] += int(player['Assist'])
@@ -310,11 +337,11 @@ def calculate_averages(all_battles_data):
             player_stats[name]['total_xp'] += int(player['XP'])
             player_stats[name]['tanks'].add(player['Tank'])
             
-            # Process accuracy (format: "hits/shots/pens")
+            # Process accuracy (format: "shots/hits/pens")
             try:
-                hits, shots, pens = map(int, player['Accuracy'].split('/'))
-                player_stats[name]['accuracy_hits'] += hits
+                shots, hits, pens = map(int, player['Accuracy'].split('/'))
                 player_stats[name]['accuracy_shots'] += shots
+                player_stats[name]['accuracy_hits'] += hits
                 player_stats[name]['accuracy_pens'] += pens
             except:
                 pass
@@ -345,10 +372,10 @@ def calculate_averages(all_battles_data):
             
             # Calculate accuracy percentages with proper averaging
             if stats['accuracy_shots'] > 0:
-                # Calculate overall hit rate (total hits / total shots)
-                hit_rate = min(100, (stats['accuracy_hits'] / stats['accuracy_shots']) * 100)
-                # Calculate overall pen rate (total pens / total hits)
-                pen_rate = min(100, (stats['accuracy_pens'] / stats['accuracy_hits']) * 100) if stats['accuracy_hits'] > 0 else 0
+                # Calculate hit rate (hits / shots)
+                hit_rate = (stats['accuracy_hits'] / stats['accuracy_shots']) * 100
+                # Calculate pen rate (pens / hits)
+                pen_rate = (stats['accuracy_pens'] / stats['accuracy_hits']) * 100 if stats['accuracy_hits'] > 0 else 0
                 avg_stats['Hit Rate'] = f"{hit_rate:.1f}%"
                 avg_stats['Pen Rate'] = f"{pen_rate:.1f}%"
             else:
@@ -363,36 +390,29 @@ def calculate_averages(all_battles_data):
     
     return averages_data
 
-def save_averages_to_excel(data, filename="battle_stats_averages.xlsx"):
-    if not data:
+def save_averages_to_excel(averages_data, output_file, battle_summary=None):
+    """Save averages data to Excel file with optional battle summary."""
+    if not averages_data:
         logger.warning("No average data to save")
         return
-    
+
     try:
-        df = pd.DataFrame(data)
+        # Create DataFrame and sort by Avg Damage in descending order
+        df = pd.DataFrame(averages_data)
+        df = df.sort_values(by='Avg Damage', ascending=False)
         
-        # Set column order
-        columns = [
-            'Name', 'Battles', 'Avg Damage', 'Avg Frags', 'Avg Assist', 'Avg Spots',
-            'Hit Rate', 'Pen Rate', 'Avg Survival', 'Avg XP', 'Tanks Used', 'Tank List'
-        ]
-        df = df[columns]
+        # Modify Tank List to be more compact
+        df['Tank List'] = df['Tank List'].apply(lambda x: x.replace(', ', ','))
         
-        # Print averages to console
-        print("\n" + "="*120)
-        print("AVERAGE STATS ACROSS ALL BATTLES")
-        print("="*120)
-        print(df.to_string(index=False))
-        print("="*120)
+        # Create Excel writer object with xlsxwriter engine
+        writer = pd.ExcelWriter(output_file, engine='xlsxwriter')
         
-        # Save to Excel with formatting
-        excel_path = os.path.join(os.getcwd(), filename)
-        writer = pd.ExcelWriter(excel_path, engine='xlsxwriter')
-        df.to_excel(writer, sheet_name='Average Stats', index=False)
+        # Write averages data
+        df.to_excel(writer, sheet_name='Player Averages', index=False)
         
-        # Get workbook and worksheet
+        # Get the workbook and worksheet objects
         workbook = writer.book
-        worksheet = writer.sheets['Average Stats']
+        worksheet = writer.sheets['Player Averages']
         
         # Add formats
         header_format = workbook.add_format({
@@ -401,109 +421,168 @@ def save_averages_to_excel(data, filename="battle_stats_averages.xlsx"):
             'font_color': 'white',
             'border': 1,
             'align': 'center',
-            'text_wrap': True
+            'text_wrap': True,
+            'valign': 'vcenter'
         })
         
         cell_format = workbook.add_format({
             'border': 1,
-            'align': 'center'
+            'align': 'left',
+            'valign': 'vcenter',
+            'text_wrap': False  # Disable text wrapping for tank list
         })
         
         number_format = workbook.add_format({
             'border': 1,
             'align': 'center',
+            'valign': 'vcenter',
             'num_format': '#,##0.0'
         })
         
-        # Format headers
-        for col_num, value in enumerate(df.columns.values):
-            worksheet.write(0, col_num, value, header_format)
-        
         # Set column widths
         column_widths = {
-            'A': 20,  # Name
-            'B': 10,  # Battles
-            'C': 12,  # Avg Damage
-            'D': 10,  # Avg Frags
-            'E': 12,  # Avg Assist
-            'F': 10,  # Avg Spots
-            'G': 10,  # Hit Rate
-            'H': 10,  # Pen Rate
-            'I': 12,  # Avg Survival
-            'J': 10,  # Avg XP
-            'K': 10,  # Tanks Used
-            'L': 40,  # Tank List
+            'Name': 30,
+            'Battles': 10,
+            'Avg Damage': 12,
+            'Avg Frags': 10,
+            'Avg Assist': 12,
+            'Avg Spots': 10,
+            'Avg XP': 10,
+            'Tanks Used': 12,
+            'Tank List': 35,  # Fixed width for tank list
+            'Hit Rate': 10,
+            'Pen Rate': 10,
+            'Avg Survival': 12
         }
         
-        for col, width in column_widths.items():
-            worksheet.set_column(f'{col}:{col}', width)
+        # Set fixed column widths
+        for col_num, column in enumerate(df.columns):
+            width = column_widths.get(column, 15)
+            worksheet.set_column(col_num, col_num, width)
+        
+        # Format headers
+        for col_num, column in enumerate(df.columns):
+            worksheet.write(0, col_num, column, header_format)
         
         # Write data with formatting
         for row in range(len(df)):
-            for col in range(len(columns)):
-                value = df.iloc[row][columns[col]]
-                if isinstance(value, (int, float)) and columns[col] not in ['Battles', 'Tanks Used']:
+            for col, column in enumerate(df.columns):
+                value = df.iloc[row][column]
+                if column == 'Tank List':
+                    # Add a comment with the full tank list
+                    full_list = str(value).replace(',', '\n')
+                    worksheet.write_comment(row + 1, col, full_list, {'width': 200, 'height': 100})
+                    # Write the truncated value
+                    if len(str(value)) > 50:
+                        truncated = str(value)[:47] + "..."
+                        worksheet.write(row + 1, col, truncated, cell_format)
+                    else:
+                        worksheet.write(row + 1, col, value, cell_format)
+                elif isinstance(value, (int, float)) and column not in ['Battles', 'Tanks Used']:
                     worksheet.write_number(row + 1, col, value, number_format)
                 else:
                     worksheet.write(row + 1, col, value, cell_format)
         
+        # Set row height
+        worksheet.set_default_row(20)
+        
         # Add alternating row colors
         for row in range(1, len(df) + 1, 2):
-            worksheet.set_row(row, None, workbook.add_format({'bg_color': '#F0F0F0'}))
+            worksheet.set_row(row, None, workbook.add_format({
+                'bg_color': '#F0F0F0',
+                'border': 1,
+                'text_wrap': False,
+                'valign': 'vcenter'
+            }))
+        
+        # Add battle summary below the main table if provided
+        if battle_summary:
+            summary_start_row = len(df) + 3
+            summary_format = workbook.add_format({
+                'bold': True,
+                'align': 'left',
+                'valign': 'vcenter',
+                'font_size': 11
+            })
+            
+            summary_text = (
+                f"Battle Summary - "
+                f"Total Battles: {battle_summary['total_battles']}  |  "
+                f"Victories: {battle_summary['victories']}  |  "
+                f"Defeats: {battle_summary['defeats']}  |  "
+                f"Win Rate: {battle_summary['win_rate']:.1f}%"
+            )
+            
+            worksheet.merge_range(
+                summary_start_row, 0, 
+                summary_start_row, len(df.columns) - 1, 
+                summary_text, summary_format
+            )
         
         writer.close()
-        
-        print(f"\nAverage stats Excel file saved to: {excel_path}")
+        logger.info(f"Excel file saved successfully to: {output_file}")
         
     except Exception as e:
-        logger.error(f"Error saving average stats to Excel: {str(e)}")
+        logger.error(f"Error saving Excel file: {str(e)}")
+        raise
 
 def main():
-    # List of battle URLs to process
+    # List of battle URLs to process (reduced to 5 for testing)
     battle_urls = [
-       "https://tomato.gg/battle/28351334265692991/508371330",
-       "https://tomato.gg/battle/28350612711186977/508371330",
-       "https://tomato.gg/battle/23380777203966145/508371330",
-       "https://tomato.gg/battle/5433092421492630/508371330",
-       "https://tomato.gg/battle/18654565126676075/508371330",
-       "https://tomato.gg/battle/18654685385760038/508371330",
-       "https://tomato.gg/battle/20087087043746582/508371330",
-       "https://tomato.gg/battle/23380425016646001/508371330",
-       "https://tomato.gg/battle/20088371238967287/508371330",
-    "https://tomato.gg/battle/5440118987986488/508371330",
-    "https://tomato.gg/battle/20087129993417890/508371330",
-    "https://tomato.gg/battle/20088246684914564/508371330",
-    "https://tomato.gg/battle/20087615324721757/508371330",
-    "https://tomato.gg/battle/20088208030208295/508371330",
-    "https://tomato.gg/battle/18655535789281121/508371330",
-    "https://tomato.gg/battle/23381391384284693/508371330",
-    "https://tomato.gg/battle/23380768614026472/508371330",
-    "https://tomato.gg/battle/5432336507243544/508371330",
-    "https://tomato.gg/battle/18654187169548980/508371330",
-    "https://tomato.gg/battle/5435798250883490/508371330",
-    "https://tomato.gg/battle/5438001569106001/508371330"
-       
+        "https://tomato.gg/battle/69523015319287012/512317641",
+        "https://tomato.gg/battle/81469217745007248/512317641",
+        "https://tomato.gg/battle/69522414023864650/512317641",
+        "https://tomato.gg/battle/69521885742886864/512317641",
+        "https://tomato.gg/battle/66958537591484033/512317641",
+        "https://tomato.gg/battle/81469050241281261/512317641",
+        "https://tomato.gg/battle/72222543998741235/512317641",
+        "https://tomato.gg/battle/76679624835328412/512317641",
+        "https://tomato.gg/battle/76679740799445025/512317641",
+        "https://tomato.gg/battle/66003611742758354/512317641",
+        "https://tomato.gg/battle/66958322843116718/512317641",
+        "https://tomato.gg/battle/76680123051533203/512317641",
+        "https://tomato.gg/battle/69522607297389211/512317641",
+        "https://tomato.gg/battle/67896068822655321/512317641",
+        "https://tomato.gg/battle/72223360042524692/512317641",
+        "https://tomato.gg/battle/66958464577036084/512317641",
+        "https://tomato.gg/battle/66958120979652186/512317641",
+        "https://tomato.gg/battle/72224107366833189/512317641",
+        "https://tomato.gg/battle/69522701786667730/512317641",
+        "https://tomato.gg/battle/64391779236043210/512317641"
     ]
     
     driver = setup_driver()
     all_battles_data = []
+    global victories, defeats
+    victories = 0
+    defeats = 0
     
     try:
         # Process each battle URL
         for i, url in enumerate(battle_urls, 1):
             logger.info(f"\nProcessing battle {i} of {len(battle_urls)}")
-            battle_data = extract_battle_data(driver, url)
+            is_victory, battle_data = extract_battle_data(driver, url)
             if battle_data:
                 all_battles_data.append(battle_data)
-                # Save individual battle data
-                save_to_excel(battle_data, f"battle_stats_{i}.xlsx")
-
+                if is_victory is not None:
+                    if is_victory:
+                        victories += 1
+                    else:
+                        defeats += 1
+            
         logger.info(f"Successfully extracted battle data from {len(all_battles_data)} out of {len(battle_urls)} battles")
+        logger.info(f"Total Victories: {victories}, Total Defeats: {defeats}")
 
         if all_battles_data:
-            # Calculate and save averages to a single Excel file (default name 'battle_stats_averages.xlsx')
+            # Calculate and save averages to a single Excel file named "day 3.xlsx"
             averages_data = calculate_averages(all_battles_data)
-            save_averages_to_excel(averages_data)
+            battle_summary = {
+                'total_battles': len(all_battles_data),
+                'victories': victories,
+                'defeats': defeats,
+                'win_rate': (victories / (victories + defeats) * 100) if victories + defeats > 0 else 0
+            }
+            save_averages_to_excel(averages_data, "day 3.xlsx", battle_summary)
             logger.info("All battles processed successfully")
         else:
             logger.error("No battle data was extracted from any battle")
@@ -513,4 +592,4 @@ def main():
         logger.info("Browser closed")
 
 if __name__ == "__main__":
-    main() 
+    main()
