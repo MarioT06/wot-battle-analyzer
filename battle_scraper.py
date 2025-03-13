@@ -33,7 +33,7 @@ def setup_driver():
     
     try:
         # Use the Chrome binary installed by build.sh
-        chrome_binary = "/opt/render/project/src/chrome/google-chrome"
+        chrome_binary = "/usr/bin/google-chrome-stable"
         chromedriver_path = "/opt/render/project/src/chrome/chromedriver"
         
         logger.info(f"Chrome binary path: {chrome_binary}")
@@ -42,12 +42,27 @@ def setup_driver():
         # Check if Chrome binary exists
         if not os.path.exists(chrome_binary):
             logger.error(f"Chrome binary not found at {chrome_binary}")
-            raise FileNotFoundError(f"Chrome binary not found at {chrome_binary}")
+            # Try alternative path
+            chrome_binary = "/opt/render/project/src/chrome/google-chrome"
+            logger.info(f"Trying alternative Chrome binary path: {chrome_binary}")
+            if not os.path.exists(chrome_binary):
+                logger.error(f"Chrome binary not found at alternative path")
+                raise FileNotFoundError(f"Chrome binary not found at any known location")
             
         # Check if ChromeDriver exists
         if not os.path.exists(chromedriver_path):
             logger.error(f"ChromeDriver not found at {chromedriver_path}")
             raise FileNotFoundError(f"ChromeDriver not found at {chromedriver_path}")
+        
+        # Log Chrome and ChromeDriver versions
+        try:
+            import subprocess
+            chrome_version = subprocess.check_output([chrome_binary, '--version']).decode().strip()
+            chromedriver_version = subprocess.check_output([chromedriver_path, '--version']).decode().strip()
+            logger.info(f"Chrome version: {chrome_version}")
+            logger.info(f"ChromeDriver version: {chromedriver_version}")
+        except Exception as e:
+            logger.warning(f"Could not get version information: {str(e)}")
         
         chrome_options.binary_location = chrome_binary
         service = Service(executable_path=chromedriver_path)
