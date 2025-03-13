@@ -34,11 +34,19 @@ def create_driver():
     try:
         driver = setup_driver()
         yield driver
+    except Exception as e:
+        logger.error(f"Error in create_driver: {str(e)}")
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        raise
     finally:
         if driver:
             try:
                 driver.quit()
-            except Exception:
+            except:
                 pass
 
 def rate_limit():
@@ -66,7 +74,12 @@ def setup_driver():
     chrome_options.add_argument('--disable-setuid-sandbox')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--remote-debugging-port=0')  # Use random debugging port
+    chrome_options.add_argument('--disable-dev-tools')  # Disable DevTools
+    chrome_options.add_argument('--disable-logging')  # Reduce logging
+    chrome_options.add_argument('--log-level=3')  # Set log level to fatal
+    chrome_options.add_argument('--silent')  # Minimize console output
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+    chrome_options.add_experimental_option('detach', True)  # Detach from browser process
     
     try:
         chrome_dir = os.getenv('CHROME_DIR', '/opt/render/project/src/chrome')
@@ -147,10 +160,11 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
                 logger.warning(f"Attempt {attempt + 1} failed for {battle_url}: {str(e)}")
                 time.sleep(RETRY_DELAY)  # Wait before retrying
                 try:
-                    driver.quit()  # Try to clean up the broken driver
-                except Exception:
+                    # Create a fresh driver for the next attempt
+                    driver.quit()
+                except:
                     pass
-                driver = setup_driver()  # Create a fresh driver
+                driver = setup_driver()
             else:
                 logger.error(f"All attempts failed for {battle_url}: {str(e)}")
                 return None, []
