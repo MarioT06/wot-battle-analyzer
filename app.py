@@ -199,10 +199,11 @@ def handle_disconnect():
     logger.info('Client disconnected')
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
+    port = int(os.environ.get('PORT', 8000))
     logger.info(f"Starting application on port {port}")
     socketio.run(app, 
                 host='0.0.0.0', 
-                port=port, 
+                port=port,
                 debug=False,
-                use_reloader=False) 
+                use_reloader=False,
+                log_output=True) 

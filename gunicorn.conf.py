@@ -1,7 +1,9 @@
 import multiprocessing
+import os
 
 # Server socket
-bind = "0.0.0.0:10000"
+port = os.environ.get('PORT', '10000')
+bind = f"0.0.0.0:{port}"
 backlog = 2048
 
 # Worker processes
@@ -12,7 +14,7 @@ timeout = 300
 keepalive = 2
 
 # Logging
-loglevel = "info"
+loglevel = "debug"  # Changed to debug for more info
 accesslog = "-"
 errorlog = "-"
 
