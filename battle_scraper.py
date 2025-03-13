@@ -32,31 +32,43 @@ def setup_driver():
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
     
     try:
-        # Use the Chrome binary installed by build.sh
-        chrome_binary = "/usr/bin/google-chrome-stable"
-        chromedriver_path = "/opt/render/project/src/chrome/chromedriver"
+        # Try to find Chrome binary
+        chrome_binary = None
+        possible_paths = [
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/google-chrome",
+            "/opt/render/project/src/chrome/google-chrome",
+            "/opt/render/project/src/chrome/google-chrome-stable"
+        ]
         
-        logger.info(f"Chrome binary path: {chrome_binary}")
-        logger.info(f"ChromeDriver path: {chromedriver_path}")
-        
-        # Check if Chrome binary exists
-        if not os.path.exists(chrome_binary):
-            logger.error(f"Chrome binary not found at {chrome_binary}")
-            # Try alternative path
-            chrome_binary = "/opt/render/project/src/chrome/google-chrome"
-            logger.info(f"Trying alternative Chrome binary path: {chrome_binary}")
-            if not os.path.exists(chrome_binary):
-                logger.error(f"Chrome binary not found at alternative path")
-                raise FileNotFoundError(f"Chrome binary not found at any known location")
+        # Try to find Chrome using 'which' command first
+        try:
+            import subprocess
+            chrome_binary = subprocess.check_output(['which', 'google-chrome-stable']).decode().strip()
+            logger.info(f"Found Chrome using which command: {chrome_binary}")
+        except:
+            logger.info("Could not find Chrome using which command, trying possible paths...")
             
-        # Check if ChromeDriver exists
+            # Try possible paths
+            for path in possible_paths:
+                if os.path.exists(path):
+                    chrome_binary = path
+                    logger.info(f"Found Chrome at: {chrome_binary}")
+                    break
+                else:
+                    logger.info(f"Chrome not found at: {path}")
+        
+        if not chrome_binary:
+            raise FileNotFoundError("Chrome binary not found in any known location")
+            
+        # Set up ChromeDriver
+        chromedriver_path = "/opt/render/project/src/chrome/chromedriver"
         if not os.path.exists(chromedriver_path):
             logger.error(f"ChromeDriver not found at {chromedriver_path}")
             raise FileNotFoundError(f"ChromeDriver not found at {chromedriver_path}")
         
         # Log Chrome and ChromeDriver versions
         try:
-            import subprocess
             chrome_version = subprocess.check_output([chrome_binary, '--version']).decode().strip()
             chromedriver_version = subprocess.check_output([chromedriver_path, '--version']).decode().strip()
             logger.info(f"Chrome version: {chrome_version}")
