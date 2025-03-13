@@ -8,5 +8,9 @@ services:
       - key: PYTHON_VERSION
         value: 3.9.0
       - key: PATH
-        value: /usr/bin:$PATH
+        value: /usr/local/bin:/usr/bin:$PATH
+      - key: CHROME_BIN
+        value: /usr/bin/google-chrome
+      - key: PYTHONUNBUFFERED
+        value: "true"
     autoDeploy: true 

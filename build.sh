@@ -1,14 +1,17 @@
-#!/usr/bin/env bash
+#!/bin/bash
+
 # Install Chrome
-wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
-echo "deb http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list
-apt-get update -y
-apt-get install -y google-chrome-stable
+curl -LO "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+sudo dpkg -i google-chrome-stable_current_amd64.deb || true
+sudo apt-get update
+sudo apt-get install -f -y
+rm google-chrome-stable_current_amd64.deb
 
 # Install ChromeDriver
-CHROME_VERSION=$(google-chrome --version | cut -d " " -f3 | cut -d "." -f1)
-wget -N https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION}
-wget -N https://chromedriver.storage.googleapis.com/$(cat LATEST_RELEASE_${CHROME_VERSION})/chromedriver_linux64.zip
+CHROME_VERSION=$(google-chrome --version | cut -d ' ' -f3)
+CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION%%.*}")
+curl -LO "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
 unzip chromedriver_linux64.zip
-mv chromedriver /usr/bin/
-chmod +x /usr/bin/chromedriver 
+sudo mv chromedriver /usr/local/bin/
+sudo chmod +x /usr/local/bin/chromedriver
+rm chromedriver_linux64.zip 
