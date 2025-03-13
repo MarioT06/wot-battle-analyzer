@@ -39,61 +39,47 @@ def setup_driver():
         chrome_dir = os.getenv('CHROME_DIR', '/opt/render/project/src/chrome')
         logger.info(f"Looking for Chrome in: {chrome_dir}")
         
-        # First try to find Chrome in system locations
-        system_paths = [
-            '/usr/bin/google-chrome-stable',
-            '/usr/bin/google-chrome',
-            '/usr/local/bin/google-chrome-stable',
-            '/usr/local/bin/google-chrome'
+        # List directory contents
+        try:
+            logger.info(f"Contents of {chrome_dir}:")
+            for item in os.listdir(chrome_dir):
+                item_path = os.path.join(chrome_dir, item)
+                logger.info(f"  {item}: {os.path.getsize(item_path)} bytes")
+        except Exception as e:
+            logger.error(f"Failed to list chrome directory contents: {str(e)}")
+        
+        # Try possible Chrome binary paths in chrome_dir
+        possible_paths = [
+            os.path.join(chrome_dir, 'chrome'),
+            os.path.join(chrome_dir, 'google-chrome'),
+            os.path.join(chrome_dir, 'google-chrome-stable')
         ]
         
-        # Try system paths first
-        for path in system_paths:
-            logger.info(f"Checking system Chrome binary at: {path}")
+        # Try possible paths
+        for path in possible_paths:
+            logger.info(f"Checking Chrome binary at: {path}")
             if os.path.exists(path):
                 if os.path.islink(path):
                     real_path = os.path.realpath(path)
                     logger.info(f"Path {path} is a symlink to {real_path}")
                 chrome_binary = path
                 logger.info(f"Found Chrome at: {chrome_binary}")
+                # Check if the file is executable
+                if os.access(path, os.X_OK):
+                    logger.info(f"Chrome binary is executable")
+                else:
+                    logger.warning(f"Chrome binary is not executable, attempting to make it executable")
+                    try:
+                        os.chmod(path, 0o755)
+                        logger.info("Successfully made Chrome binary executable")
+                    except Exception as e:
+                        logger.error(f"Failed to make Chrome binary executable: {str(e)}")
                 break
-        
-        # If not found in system paths, check chrome_dir
-        if not chrome_binary:
-            logger.info("Chrome not found in system paths, checking chrome_dir")
-            try:
-                logger.info(f"Contents of {chrome_dir}:")
-                for item in os.listdir(chrome_dir):
-                    item_path = os.path.join(chrome_dir, item)
-                    logger.info(f"  {item}: {os.path.getsize(item_path)} bytes")
-                    if item in ['google-chrome-stable', 'google-chrome']:
-                        chrome_binary = item_path
-                        logger.info(f"Found Chrome in chrome_dir: {chrome_binary}")
-                        break
-            except Exception as e:
-                logger.error(f"Failed to list chrome directory contents: {str(e)}")
-        
-        # If still not found, try using which command
-        if not chrome_binary:
-            try:
-                logger.info("Trying to find Chrome using which command")
-                chrome_binary = subprocess.check_output(['which', 'google-chrome-stable']).decode().strip()
-                logger.info(f"Found Chrome using which command: {chrome_binary}")
-            except Exception as e:
-                logger.error(f"Failed to find Chrome using which command: {str(e)}")
+            else:
+                logger.info(f"Chrome not found at: {path}")
         
         if not chrome_binary:
             raise FileNotFoundError("Chrome binary not found in any known location")
-        
-        # Verify Chrome binary is executable
-        if not os.access(chrome_binary, os.X_OK):
-            logger.warning(f"Chrome binary is not executable: {chrome_binary}")
-            try:
-                subprocess.run(['sudo', 'chmod', '+x', chrome_binary], check=True)
-                logger.info("Made Chrome binary executable")
-            except Exception as e:
-                logger.error(f"Failed to make Chrome binary executable: {str(e)}")
-                raise
         
         # Set up ChromeDriver
         chromedriver_path = os.path.join(chrome_dir, 'chromedriver')
@@ -111,9 +97,8 @@ def setup_driver():
             logger.warning(f"Could not get version information: {str(e)}")
         
         # Add Chrome binary directory to PATH
-        chrome_bin_dir = os.path.dirname(chrome_binary)
-        os.environ['PATH'] = f"{chrome_bin_dir}:/usr/bin:{chrome_dir}:{os.environ.get('PATH', '')}"
-        logger.info(f"Updated PATH with Chrome directories: {chrome_bin_dir}, {chrome_dir}")
+        os.environ['PATH'] = f"{chrome_dir}:{os.environ.get('PATH', '')}"
+        logger.info(f"Updated PATH with Chrome directory: {chrome_dir}")
         
         chrome_options.binary_location = chrome_binary
         service = Service(executable_path=chromedriver_path)
