@@ -1,17 +1,20 @@
 #!/bin/bash
 
-# Install Chrome
-curl -LO "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
-dpkg -i google-chrome-stable_current_amd64.deb || true
-apt-get update
-apt-get install -f -y
-rm google-chrome-stable_current_amd64.deb
+# Create directories for Chrome and ChromeDriver
+mkdir -p $HOME/chrome
+mkdir -p $HOME/chromedriver
 
-# Install ChromeDriver
-CHROME_VERSION=$(google-chrome --version | cut -d ' ' -f3)
-CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION%%.*}")
-curl -LO "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
-unzip chromedriver_linux64.zip
-mv chromedriver /usr/local/bin/
-chmod +x /usr/local/bin/chromedriver
-rm chromedriver_linux64.zip 
+# Download and extract Chrome
+curl -o $HOME/chrome/chrome.zip "https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Linux_x64%2F1097615%2Fchrome-linux.zip?alt=media"
+unzip $HOME/chrome/chrome.zip -d $HOME/chrome/
+rm $HOME/chrome/chrome.zip
+
+# Download and setup ChromeDriver
+CHROMEDRIVER_VERSION="114.0.5735.90"  # Using a stable version
+curl -Lo $HOME/chromedriver/chromedriver.zip "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
+unzip $HOME/chromedriver/chromedriver.zip -d $HOME/chromedriver/
+chmod +x $HOME/chromedriver/chromedriver
+rm $HOME/chromedriver/chromedriver.zip
+
+# Add Chrome and ChromeDriver to PATH
+export PATH=$HOME/chrome/chrome-linux:$HOME/chromedriver:$PATH 
