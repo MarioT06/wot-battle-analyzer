@@ -15,275 +15,115 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 import queue
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging - reduce logging to speed up processing
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# Global rate limiting queue
+# Global rate limiting queue - increased limit for faster processing
 request_queue = queue.Queue()
-MAX_REQUESTS_PER_MINUTE = 30  # Adjust this based on the website's limits
-DELAY_BETWEEN_REQUESTS = 60 / MAX_REQUESTS_PER_MINUTE  # Time between requests in seconds
+MAX_REQUESTS_PER_MINUTE = 60  # Doubled from 30
+DELAY_BETWEEN_REQUESTS = 60 / MAX_REQUESTS_PER_MINUTE
 
 def rate_limit():
     """Implement rate limiting for requests"""
     try:
-        request_queue.put_nowait(time.time())
+        current_time = time.time()
+        request_queue.put_nowait(current_time)
         if request_queue.qsize() > MAX_REQUESTS_PER_MINUTE:
             oldest_request = request_queue.get()
-            time_since_oldest = time.time() - oldest_request
-            if time_since_oldest < 60:  # If less than a minute has passed
-                sleep_time = 60 - time_since_oldest
-                time.sleep(sleep_time)
+            time_since_oldest = current_time - oldest_request
+            if time_since_oldest < 60:
+                time.sleep(max(0.1, (60 - time_since_oldest) / MAX_REQUESTS_PER_MINUTE))
     except queue.Full:
         time.sleep(DELAY_BETWEEN_REQUESTS)
 
 def setup_driver():
-    logger.info("Setting up Chrome driver...")
     chrome_options = Options()
-    
-    # Enable headless mode and other required options
     chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--disable-software-rasterizer')
-    chrome_options.add_argument('--remote-debugging-port=9222')
     chrome_options.add_argument('--disable-extensions')
     chrome_options.add_argument('--disable-setuid-sandbox')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
     
     try:
-        import subprocess
-        
-        # Try to find Chrome binary
-        chrome_binary = None
         chrome_dir = os.getenv('CHROME_DIR', '/opt/render/project/src/chrome')
-        logger.info(f"Looking for Chrome in: {chrome_dir}")
-        
-        # List directory contents
-        try:
-            logger.info(f"Contents of {chrome_dir}:")
-            for item in os.listdir(chrome_dir):
-                item_path = os.path.join(chrome_dir, item)
-                logger.info(f"  {item}: {os.path.getsize(item_path)} bytes")
-        except Exception as e:
-            logger.error(f"Failed to list chrome directory contents: {str(e)}")
-        
-        # Try possible Chrome binary paths in chrome_dir
         possible_paths = [
-            os.path.join(chrome_dir, 'chrome'),
-            os.path.join(chrome_dir, 'google-chrome'),
-            os.path.join(chrome_dir, 'google-chrome-stable')
+            os.path.join(chrome_dir, name) for name in 
+            ['chrome', 'google-chrome', 'google-chrome-stable']
         ]
         
-        # Try possible paths
-        for path in possible_paths:
-            logger.info(f"Checking Chrome binary at: {path}")
-            if os.path.exists(path):
-                if os.path.islink(path):
-                    real_path = os.path.realpath(path)
-                    logger.info(f"Path {path} is a symlink to {real_path}")
-                chrome_binary = path
-                logger.info(f"Found Chrome at: {chrome_binary}")
-                # Check if the file is executable
-                if os.access(path, os.X_OK):
-                    logger.info(f"Chrome binary is executable")
-                else:
-                    logger.warning(f"Chrome binary is not executable, attempting to make it executable")
-                    try:
-                        os.chmod(path, 0o755)
-                        logger.info("Successfully made Chrome binary executable")
-                    except Exception as e:
-                        logger.error(f"Failed to make Chrome binary executable: {str(e)}")
-                break
-            else:
-                logger.info(f"Chrome not found at: {path}")
+        chrome_binary = next(
+            (path for path in possible_paths if os.path.exists(path)), 
+            None
+        )
         
         if not chrome_binary:
-            raise FileNotFoundError("Chrome binary not found in any known location")
+            raise FileNotFoundError("Chrome binary not found")
         
-        # Set up ChromeDriver
         chromedriver_path = os.path.join(chrome_dir, 'chromedriver')
         if not os.path.exists(chromedriver_path):
-            logger.error(f"ChromeDriver not found at {chromedriver_path}")
-            raise FileNotFoundError(f"ChromeDriver not found at {chromedriver_path}")
+            raise FileNotFoundError("ChromeDriver not found")
         
-        # Log Chrome and ChromeDriver versions
-        try:
-            chrome_version = subprocess.check_output([chrome_binary, '--version', '--no-sandbox']).decode().strip()
-            chromedriver_version = subprocess.check_output([chromedriver_path, '--version']).decode().strip()
-            logger.info(f"Chrome version: {chrome_version}")
-            logger.info(f"ChromeDriver version: {chromedriver_version}")
-        except Exception as e:
-            logger.warning(f"Could not get version information: {str(e)}")
-        
-        # Add Chrome binary directory to PATH
         os.environ['PATH'] = f"{chrome_dir}:{os.environ.get('PATH', '')}"
-        logger.info(f"Updated PATH with Chrome directory: {chrome_dir}")
-        
         chrome_options.binary_location = chrome_binary
         service = Service(executable_path=chromedriver_path)
         
         driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(30)
-        logger.info("Chrome driver setup successful")
+        driver.set_page_load_timeout(15)  # Reduced from 30
         return driver
     except Exception as e:
         logger.error(f"Failed to create Chrome driver: {str(e)}")
         raise
 
 def extract_battle_data(driver, battle_url):
-    logger.info(f"Accessing battle page: {battle_url}")
     try:
-        # Apply rate limiting
         rate_limit()
-        
         driver.get(battle_url)
         
-        # Wait for page to load dynamically
-        wait = WebDriverWait(driver, 30)
-        
-        # Wait for either victory or defeat element
+        # Reduced wait time and more specific wait condition
+        wait = WebDriverWait(driver, 10)  # Reduced from 30
         result_xpath = "//div[@result='win'] | //div[@result='loss']"
-        wait.until(EC.presence_of_element_located((By.XPATH, result_xpath)))
+        result_element = wait.until(EC.presence_of_element_located((By.XPATH, result_xpath)))
         
-        # Add a small random delay to simulate human behavior
-        time.sleep(random.uniform(1, 3))
+        is_victory = 'win' in result_element.get_attribute('result')
         
-        # Try to find the battle result div using XPath to find div with result attribute
-        result_selectors = [
-            "//div[@result='win']",  # Look for victory
-            "//div[@result='loss']"  # Look for defeat
-        ]
-        
-        is_victory = None
-        for selector in result_selectors:
-            try:
-                logger.info(f"Trying to find result div with selector: {selector}")
-                elements = driver.find_elements(By.XPATH, selector)
-                
-                if elements:
-                    logger.info(f"Found {len(elements)} result elements with selector {selector}")
-                    is_victory = 'win' in selector
-                    logger.info(f"Battle result: {'Victory' if is_victory else 'Defeat'}")
-                    break
-            except Exception as e:
-                logger.warning(f"Failed with result selector {selector}: {str(e)}")
-                continue
-        
-        if is_victory is None:
-            logger.warning("Could not find result div element")
-            return None, []
-        
-        # Try different table selectors
-        table_selectors = [
-            "table",  # Try simplest first
-            "div table",
-            "div.battle-table table",
-            "//table",  # Try XPath
-            "//div//table"
-        ]
-        
-        table = None
-        for selector in table_selectors:
-            try:
-                logger.info(f"Trying to find table with selector: {selector}")
-                if selector.startswith("//"):
-                    # XPath selector
-                    tables = driver.find_elements(By.XPATH, selector)
-                else:
-                    # CSS selector
-                    tables = driver.find_elements(By.CSS_SELECTOR, selector)
-                
-                if tables:
-                    logger.info(f"Found {len(tables)} tables with selector {selector}")
-                    table = tables[0]
-                    break
-            except Exception as e:
-                logger.warning(f"Failed with selector {selector}: {str(e)}")
-                continue
-        
-        if not table:
-            logger.error("Could not find any table")
-            return None, []
-        
-        # Get all rows
-        rows = table.find_elements(By.TAG_NAME, "tr")
-        logger.info(f"Found {len(rows)} total rows")
-        
-        if len(rows) <= 1:
-            logger.error("Not enough rows found in table")
-            return None, []
-        
-        # Skip header row
-        rows = rows[1:]
-        logger.info(f"Processing {len(rows)} data rows")
+        # Find table directly - simplified selector strategy
+        table = wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+        rows = table.find_elements(By.TAG_NAME, "tr")[1:]  # Skip header
         
         battle_data = []
-        for row_index, row in enumerate(rows, 1):
+        for row in rows:
             try:
                 cells = row.find_elements(By.TAG_NAME, "td")
-                logger.info(f"Row {row_index} has {len(cells)} cells")
-                
-                # Log all cell contents for debugging
-                cell_texts = [cell.text.strip() for cell in cells]
-                logger.info(f"Row {row_index} cell contents: {cell_texts}")
-                
                 if len(cells) < 10:
-                    logger.warning(f"Row {row_index} has insufficient cells: {len(cells)}")
                     continue
                 
-                # Get player name and tank name directly from text
-                player_name = cells[2].text.strip()
-                tank_name = cells[1].text.strip()
-                
-                logger.info(f"Row {row_index} - Player: '{player_name}', Tank: '{tank_name}'")
-                
-                if not player_name or not tank_name:
-                    logger.warning(f"Missing data in row {row_index}")
-                    continue
-                
-                # Extract stats
                 stats = {
-                    'Name': player_name,
-                    'Tank': tank_name,
-                    'Damage': '0',
-                    'Frags': '0',
-                    'Assist': '0',
-                    'Spots': '0',
-                    'Accuracy': '',
-                    'Survival': '',
-                    'XP': '0'
+                    'Name': cells[2].text.strip(),
+                    'Tank': cells[1].text.strip(),
+                    'Damage': ''.join(filter(str.isdigit, cells[3].text.strip())) or '0',
+                    'Frags': ''.join(filter(str.isdigit, cells[4].text.strip())) or '0',
+                    'Assist': ''.join(filter(str.isdigit, cells[5].text.strip())) or '0',
+                    'Spots': ''.join(filter(str.isdigit, cells[6].text.strip())) or '0',
+                    'Accuracy': cells[7].text.strip(),
+                    'Survival': cells[8].text.strip(),
+                    'XP': ''.join(filter(str.isdigit, cells[9].text.strip())) or '0'
                 }
                 
-                # Extract stats from cells
-                if len(cells) >= 10:
-                    stats['Damage'] = ''.join(filter(str.isdigit, cells[3].text.strip())) or '0'
-                    stats['Frags'] = ''.join(filter(str.isdigit, cells[4].text.strip())) or '0'
-                    stats['Assist'] = ''.join(filter(str.isdigit, cells[5].text.strip())) or '0'
-                    stats['Spots'] = ''.join(filter(str.isdigit, cells[6].text.strip())) or '0'
-                    stats['Accuracy'] = cells[7].text.strip()
-                    stats['Survival'] = cells[8].text.strip()
-                    stats['XP'] = ''.join(filter(str.isdigit, cells[9].text.strip())) or '0'
+                if stats['Name'] and stats['Tank']:
+                    battle_data.append(stats)
                 
-                logger.info(f"Extracted stats for row {row_index}: {stats}")
-                battle_data.append(stats)
-                
-            except Exception as e:
-                logger.warning(f"Error processing row {row_index}: {str(e)}")
+            except Exception:
                 continue
-        
-        if not battle_data:
-            logger.error("No data was extracted from any row")
-            return None, []
-        else:
-            logger.info(f"Successfully extracted data from {len(battle_data)} rows")
         
         return is_victory, battle_data
     
     except Exception as e:
-        logger.error(f"Error accessing battle page: {str(e)}")
+        logger.error(f"Error processing {battle_url}: {str(e)}")
         return None, []
 
 def save_to_excel(data, filename):
@@ -681,24 +521,21 @@ def main():
         "https://tomato.gg/battle/64391779236043210/512317641"
     ]
     
-    # Calculate optimal number of threads based on CPU cores and memory
-    max_threads = min(os.cpu_count() or 1, 4)  # Limit to 4 threads to avoid overwhelming the system
+    # Increased number of threads for faster processing
+    max_threads = min(os.cpu_count() or 1, 8)  # Increased from 4 to 8
     chunk_size = max(1, len(battle_urls) // max_threads)
-    
-    # Split URLs into chunks
     url_chunks = [battle_urls[i:i + chunk_size] for i in range(0, len(battle_urls), chunk_size)]
     
     all_battles_data = []
     total_victories = 0
     total_defeats = 0
     
-    logger.info(f"Processing battles using {max_threads} threads")
+    start_time = time.time()
+    logger.warning(f"Starting battle processing with {max_threads} threads")
     
-    # Process chunks in parallel
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
         futures = [executor.submit(process_battle_chunk, chunk) for chunk in url_chunks]
         
-        # Collect results as they complete
         for future in concurrent.futures.as_completed(futures):
             try:
                 chunk_data, chunk_victories, chunk_defeats = future.result()
@@ -708,11 +545,14 @@ def main():
             except Exception as e:
                 logger.error(f"Error processing chunk: {str(e)}")
     
-    logger.info(f"Successfully extracted battle data from {len(all_battles_data)} out of {len(battle_urls)} battles")
-    logger.info(f"Total Victories: {total_victories}, Total Defeats: {total_defeats}")
+    end_time = time.time()
+    processing_time = end_time - start_time
+    
+    logger.warning(f"Processing completed in {processing_time:.2f} seconds")
+    logger.warning(f"Processed {len(all_battles_data)} battles")
+    logger.warning(f"Speed: {len(all_battles_data)/processing_time:.2f} battles/second")
     
     if all_battles_data:
-        # Calculate and save averages
         averages_data = calculate_averages(all_battles_data)
         battle_summary = {
             'total_battles': len(all_battles_data),
@@ -721,9 +561,9 @@ def main():
             'win_rate': (total_victories / (total_victories + total_defeats) * 100) if total_victories + total_defeats > 0 else 0
         }
         save_averages_to_excel(averages_data, "day 3.xlsx", battle_summary)
-        logger.info("All battles processed successfully")
+        logger.warning("Results saved to Excel file")
     else:
-        logger.error("No battle data was extracted from any battle")
+        logger.error("No battle data was extracted")
 
 if __name__ == "__main__":
     main()
