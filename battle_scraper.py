@@ -19,7 +19,7 @@ def setup_driver():
     logger.info("Setting up Chrome driver...")
     chrome_options = Options()
     
-    # Enable headless mode
+    # Enable headless mode and other required options
     chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
@@ -39,9 +39,8 @@ def setup_driver():
         
         # Check if Chrome is installed
         chrome_installed = os.path.exists(os.path.join(chrome_dir, '.chrome_installed'))
-        if not chrome_installed:
-            logger.error("Chrome installation marker not found. Chrome may not be installed correctly.")
-            
+        logger.info(f"Chrome installation marker exists: {chrome_installed}")
+        
         # List directory contents
         try:
             logger.info(f"Contents of {chrome_dir}:")
@@ -51,17 +50,21 @@ def setup_driver():
         except Exception as e:
             logger.error(f"Failed to list chrome directory contents: {str(e)}")
         
+        # Try possible Chrome binary paths
         possible_paths = [
+            '/usr/bin/google-chrome-stable',  # System installation
+            '/usr/bin/google-chrome',         # System symlink
             os.path.join(chrome_dir, 'google-chrome-stable'),
             os.path.join(chrome_dir, 'google-chrome'),
-            "/usr/bin/google-chrome-stable",  # fallback
-            "/usr/bin/google-chrome"          # fallback
         ]
         
         # Try possible paths
         for path in possible_paths:
             logger.info(f"Checking Chrome binary at: {path}")
             if os.path.exists(path):
+                if os.path.islink(path):
+                    real_path = os.path.realpath(path)
+                    logger.info(f"Path {path} is a symlink to {real_path}")
                 chrome_binary = path
                 logger.info(f"Found Chrome at: {chrome_binary}")
                 # Check if the file is executable
@@ -79,7 +82,14 @@ def setup_driver():
                 logger.info(f"Chrome not found at: {path}")
         
         if not chrome_binary:
-            raise FileNotFoundError("Chrome binary not found in any known location")
+            # Try to find Chrome using which command
+            try:
+                import subprocess
+                chrome_binary = subprocess.check_output(['which', 'google-chrome-stable']).decode().strip()
+                logger.info(f"Found Chrome using which command: {chrome_binary}")
+            except Exception as e:
+                logger.error(f"Failed to find Chrome using which command: {str(e)}")
+                raise FileNotFoundError("Chrome binary not found in any known location")
             
         # Set up ChromeDriver
         chromedriver_path = os.path.join(chrome_dir, 'chromedriver')
@@ -89,19 +99,20 @@ def setup_driver():
         
         # Log Chrome and ChromeDriver versions
         try:
-            import subprocess
-            chrome_version = subprocess.check_output([chrome_binary, '--version']).decode().strip()
+            chrome_version = subprocess.check_output([chrome_binary, '--version', '--no-sandbox']).decode().strip()
             chromedriver_version = subprocess.check_output([chromedriver_path, '--version']).decode().strip()
             logger.info(f"Chrome version: {chrome_version}")
             logger.info(f"ChromeDriver version: {chromedriver_version}")
         except Exception as e:
             logger.warning(f"Could not get version information: {str(e)}")
         
+        # Add Chrome binary directory to PATH
+        chrome_bin_dir = os.path.dirname(chrome_binary)
+        os.environ['PATH'] = f"{chrome_bin_dir}:{chrome_dir}:{os.environ.get('PATH', '')}"
+        logger.info(f"Updated PATH with Chrome directories: {chrome_bin_dir}, {chrome_dir}")
+        
         chrome_options.binary_location = chrome_binary
         service = Service(executable_path=chromedriver_path)
-        
-        # Add Chrome binary directory to PATH
-        os.environ['PATH'] = f"{chrome_dir}:{os.environ.get('PATH', '')}"
         
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.set_page_load_timeout(30)
