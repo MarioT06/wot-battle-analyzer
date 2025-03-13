@@ -64,9 +64,13 @@ def rate_limit():
 
 def setup_driver():
     """Set up Chrome driver with optimized settings"""
+    # Try different ports if the default one is in use
+    ports = list(range(9515, 9525))  # Try ports 9515-9524
+    random.shuffle(ports)  # Randomize to avoid conflicts
+    
     chrome_options = Options()
-    chrome_options.add_argument('--headless=new')  # Use new headless mode
-    chrome_options.add_argument('--no-sandbox')  # Required for running in container
+    chrome_options.add_argument('--headless=new')
+    chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--disable-software-rasterizer')
@@ -77,82 +81,207 @@ def setup_driver():
     chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--log-level=3')
     chrome_options.add_argument('--silent')
-    chrome_options.add_argument('--single-process')  # Run in single process mode
+    chrome_options.add_argument('--single-process')
     chrome_options.add_argument('--disable-infobars')
     chrome_options.add_argument('--disable-notifications')
     chrome_options.add_argument('--disable-popup-blocking')
     chrome_options.add_argument('--ignore-certificate-errors')
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-    chrome_options.add_argument('--disable-dbus')  # Disable D-Bus usage
-    chrome_options.add_argument('--no-zygote')  # Disable zygote process
-    chrome_options.add_argument('--no-first-run')  # Skip first run tasks
-    chrome_options.add_argument('--disable-features=TranslateUI')  # Disable translation features
+    chrome_options.add_argument('--disable-dbus')
+    chrome_options.add_argument('--no-zygote')
+    chrome_options.add_argument('--no-first-run')
+    chrome_options.add_argument('--disable-features=TranslateUI')
+    chrome_options.add_argument('--remote-debugging-port=0')  # Use random debugging port
+    chrome_options.add_argument('--disable-background-networking')
+    chrome_options.add_argument('--disable-default-apps')
+    chrome_options.add_argument('--disable-sync')
+    chrome_options.add_argument('--disable-translate')
+    chrome_options.add_argument('--hide-scrollbars')
+    chrome_options.add_argument('--metrics-recording-only')
+    chrome_options.add_argument('--mute-audio')
+    chrome_options.add_argument('--no-default-browser-check')
+    chrome_options.add_argument('--force-webrtc-ip-handling-policy=disable_non_proxied_udp')
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
     chrome_options.add_experimental_option('detach', True)
     
-    try:
-        chrome_dir = os.getenv('CHROME_DIR', '/opt/render/project/src/chrome')
-        possible_paths = [
-            os.path.join(chrome_dir, name) for name in 
-            ['chrome', 'google-chrome', 'google-chrome-stable']
-        ]
-        
-        chrome_binary = next(
-            (path for path in possible_paths if os.path.exists(path)), 
-            None
-        )
-        
-        if not chrome_binary:
-            raise FileNotFoundError("Chrome binary not found")
-        
-        chromedriver_path = os.path.join(chrome_dir, 'chromedriver')
-        if not os.path.exists(chromedriver_path):
-            raise FileNotFoundError("ChromeDriver not found")
-        
-        # Ensure proper PATH setup
-        os.environ['PATH'] = f"{chrome_dir}:{os.environ.get('PATH', '')}"
-        chrome_options.binary_location = chrome_binary
-        
-        # Create service with specific log settings
-        service = Service(
-            executable_path=chromedriver_path,
-            log_output=os.devnull  # Suppress service logs
-        )
-        
-        # Create and configure driver
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(15)
-        
-        # Additional error handling setup
-        driver.execute_cdp_cmd('Network.setBypassServiceWorker', {'bypass': True})
-        driver.execute_cdp_cmd('Page.setBypassCSP', {'enabled': True})
-        
-        return driver
-    except Exception as e:
-        logger.error(f"Failed to create Chrome driver: {str(e)}")
-        raise
+    last_exception = None
+    for port in ports:
+        try:
+            # Log environment information
+            logger.warning(f"Current working directory: {os.getcwd()}")
+            logger.warning(f"PATH: {os.environ.get('PATH', '')}")
+            
+            chrome_dir = os.getenv('CHROME_DIR', '/opt/render/project/src/chrome')
+            logger.warning(f"Chrome directory: {chrome_dir}")
+            
+            possible_paths = [
+                os.path.join(chrome_dir, name) for name in 
+                ['chrome', 'google-chrome', 'google-chrome-stable']
+            ]
+            
+            # Log available Chrome binaries
+            for path in possible_paths:
+                if os.path.exists(path):
+                    logger.warning(f"Found Chrome binary at: {path}")
+                else:
+                    logger.warning(f"No Chrome binary at: {path}")
+            
+            chrome_binary = next(
+                (path for path in possible_paths if os.path.exists(path)), 
+                None
+            )
+            
+            if not chrome_binary:
+                raise FileNotFoundError("Chrome binary not found")
+            
+            chromedriver_path = os.path.join(chrome_dir, 'chromedriver')
+            if not os.path.exists(chromedriver_path):
+                raise FileNotFoundError("ChromeDriver not found")
+            
+            # Log binary permissions
+            logger.warning(f"Chrome binary permissions: {oct(os.stat(chrome_binary).st_mode)[-3:]}")
+            logger.warning(f"ChromeDriver permissions: {oct(os.stat(chromedriver_path).st_mode)[-3:]}")
+            
+            # Ensure proper PATH setup
+            os.environ['PATH'] = f"{chrome_dir}:{os.environ.get('PATH', '')}"
+            chrome_options.binary_location = chrome_binary
+            
+            # Create service with specific port and log settings
+            service = Service(
+                executable_path=chromedriver_path,
+                port=port,
+                log_output=os.devnull
+            )
+            
+            # Create and configure driver with increased timeouts
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            driver.set_page_load_timeout(30)  # Increased from 15 to 30 seconds
+            driver.command_executor.set_timeout(30)  # Set command timeout
+            
+            # Test the connection with retries
+            max_test_retries = 3
+            for test_attempt in range(max_test_retries):
+                try:
+                    driver.execute_script('return navigator.userAgent')
+                    break
+                except Exception as test_e:
+                    if test_attempt == max_test_retries - 1:
+                        raise
+                    logger.warning(f"Connection test attempt {test_attempt + 1} failed: {str(test_e)}")
+                    time.sleep(1)
+            
+            # If we get here, the connection is working
+            logger.warning(f"Successfully connected to ChromeDriver on port {port}")
+            return driver
+            
+        except Exception as e:
+            last_exception = e
+            logger.warning(f"Failed to create Chrome driver on port {port}: {str(e)}")
+            try:
+                if 'driver' in locals():
+                    driver.quit()
+            except:
+                pass
+            
+    # If we get here, all ports failed
+    raise Exception(f"Failed to create Chrome driver on any port. Last error: {str(last_exception)}")
 
 def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
     """Extract battle data with retry logic"""
     for attempt in range(max_retries):
         try:
             rate_limit()
-            driver.get(battle_url)
             
-            wait = WebDriverWait(driver, 10)
+            # Log attempt information
+            logger.warning(f"Processing battle {battle_url} (Attempt {attempt + 1}/{max_retries})")
+            
+            # Clear any existing state
+            try:
+                driver.delete_all_cookies()
+                driver.execute_script("window.localStorage.clear();")
+                driver.execute_script("window.sessionStorage.clear();")
+            except Exception as e:
+                logger.warning(f"Failed to clear browser state: {str(e)}")
+            
+            # Test driver health before proceeding
+            try:
+                driver.current_url
+            except Exception as e:
+                logger.warning(f"Driver health check failed: {str(e)}")
+                raise WebDriverException("Driver is not responsive")
+            
+            # Load the page with retry on timeout
+            load_attempts = 3
+            for load_attempt in range(load_attempts):
+                try:
+                    logger.warning(f"Loading page (Attempt {load_attempt + 1}/{load_attempts})")
+                    driver.get(battle_url)
+                    break
+                except TimeoutException:
+                    if load_attempt < load_attempts - 1:
+                        logger.warning(f"Page load timeout, attempt {load_attempt + 1}/{load_attempts}")
+                        continue
+                    raise
+                except Exception as e:
+                    logger.warning(f"Unexpected error during page load: {str(e)}")
+                    raise
+            
+            # Wait for result element with a more robust check
+            wait = WebDriverWait(driver, 30)  # Increased timeout
             result_xpath = "//div[@result='win'] | //div[@result='loss']"
-            result_element = wait.until(EC.presence_of_element_located((By.XPATH, result_xpath)))
+            
+            # First check if page loaded at all
+            try:
+                body = wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                logger.warning("Page body loaded successfully")
+            except TimeoutException:
+                logger.warning("Timeout waiting for page body")
+                raise
+            
+            # Check for error indicators
+            try:
+                if "404" in driver.title or "Error" in driver.title:
+                    logger.warning(f"Error page detected: {driver.title}")
+                    return None, []
+                if "404" in driver.page_source or "error" in driver.page_source.lower():
+                    logger.warning("Error content detected in page source")
+                    return None, []
+            except Exception as e:
+                logger.warning(f"Error checking page content: {str(e)}")
+            
+            # Then check for specific elements
+            try:
+                result_element = wait.until(EC.presence_of_element_located((By.XPATH, result_xpath)))
+                logger.warning("Battle result element found")
+            except TimeoutException:
+                logger.warning("Timeout waiting for battle result element")
+                if "404" in driver.title or "Error" in driver.title:
+                    logger.warning(f"Battle page not found or error: {battle_url}")
+                    return None, []
+                raise
             
             is_victory = 'win' in result_element.get_attribute('result')
+            logger.warning(f"Battle result: {'Victory' if is_victory else 'Defeat'}")
             
-            table = wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+            # Wait for table with explicit presence check
+            try:
+                table = wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+                if not table.is_displayed():
+                    wait.until(EC.visibility_of(table))
+                logger.warning("Battle data table found and visible")
+            except TimeoutException:
+                logger.warning("Timeout waiting for battle data table")
+                raise
+            
             rows = table.find_elements(By.TAG_NAME, "tr")[1:]
+            logger.warning(f"Found {len(rows)} player rows in table")
             
             battle_data = []
-            for row in rows:
+            for row_index, row in enumerate(rows, 1):
                 try:
                     cells = row.find_elements(By.TAG_NAME, "td")
                     if len(cells) < 10:
+                        logger.warning(f"Row {row_index} has insufficient cells: {len(cells)}")
                         continue
                     
                     stats = {
@@ -169,23 +298,38 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
                     
                     if stats['Name'] and stats['Tank']:
                         battle_data.append(stats)
+                        logger.warning(f"Processed player: {stats['Name']} in {stats['Tank']}")
+                    else:
+                        logger.warning(f"Row {row_index} missing required data: Name={bool(stats['Name'])}, Tank={bool(stats['Tank'])}")
                     
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Error processing row {row_index}: {str(e)}")
                     continue
             
             if battle_data:  # Only return if we got data
+                logger.warning(f"Successfully extracted data for {len(battle_data)} players")
                 return is_victory, battle_data
+            else:
+                logger.warning("No valid battle data found in table")
+                raise Exception("No valid battle data found in table")
             
         except (WebDriverException, TimeoutException) as e:
             if attempt < max_retries - 1:
                 logger.warning(f"Attempt {attempt + 1} failed for {battle_url}: {str(e)}")
                 time.sleep(RETRY_DELAY)  # Wait before retrying
                 try:
-                    # Create a fresh driver for the next attempt
-                    driver.quit()
-                except:
-                    pass
-                driver = setup_driver()
+                    # Try to recover the driver
+                    driver.execute_script('return navigator.userAgent')
+                    logger.warning("Driver recovery successful")
+                except Exception as recovery_e:
+                    logger.warning(f"Driver recovery failed: {str(recovery_e)}")
+                    # If driver is dead, create a new one
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+                    logger.warning("Creating new driver instance")
+                    driver = setup_driver()
             else:
                 logger.error(f"All attempts failed for {battle_url}: {str(e)}")
                 return None, []
@@ -587,45 +731,67 @@ def main():
         "https://tomato.gg/battle/64391779236043210/512317641"
     ]
     
-    # Use fewer threads but process more efficiently
-    max_threads = min(os.cpu_count() or 1, 4)  # Reduced from 8 to 4 for stability
-    chunk_size = max(1, len(battle_urls) // max_threads)
-    url_chunks = [battle_urls[i:i + chunk_size] for i in range(0, len(battle_urls), chunk_size)]
+    # Use single thread for maximum stability
+    max_threads = 1  # Process battles sequentially
+    chunk_size = len(battle_urls)  # Process all battles in one chunk
+    url_chunks = [battle_urls]  # Single chunk containing all URLs
     
     all_battles_data = []
     total_victories = 0
     total_defeats = 0
     processed_battles = 0
+    failed_battles = []  # Track failed battles
     
     start_time = time.time()
-    logger.warning(f"Starting battle processing with {max_threads} threads")
+    logger.warning(f"Starting battle processing in single-threaded mode")
     
-    with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        futures = [executor.submit(process_battle_chunk, chunk) for chunk in url_chunks]
-        
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                chunk_data, chunk_victories, chunk_defeats = future.result()
-                all_battles_data.extend(chunk_data)
-                total_victories += chunk_victories
-                total_defeats += chunk_defeats
-                processed_battles += len(chunk_data)
-                
-                # Show progress
-                elapsed_time = time.time() - start_time
-                battles_per_second = processed_battles / elapsed_time if elapsed_time > 0 else 0
-                logger.warning(f"Processed {processed_battles}/{len(battle_urls)} battles. "
-                             f"Speed: {battles_per_second:.2f} battles/second")
-                
-            except Exception as e:
-                logger.error(f"Error processing chunk: {str(e)}")
+    try:
+        # Process all battles in a single chunk
+        with create_driver() as driver:
+            for url in battle_urls:
+                try:
+                    is_victory, battle_data = extract_battle_data_with_retry(driver, url)
+                    if battle_data:
+                        all_battles_data.append(battle_data)
+                        if is_victory is not None:
+                            if is_victory:
+                                total_victories += 1
+                            else:
+                                total_defeats += 1
+                        processed_battles += 1
+                        
+                        # Show progress
+                        elapsed_time = time.time() - start_time
+                        battles_per_second = processed_battles / elapsed_time if elapsed_time > 0 else 0
+                        logger.warning(f"Processed {processed_battles}/{len(battle_urls)} battles. "
+                                     f"Speed: {battles_per_second:.2f} battles/second")
+                    else:
+                        failed_battles.append(url)
+                        logger.error(f"Failed to process battle: {url}")
+                        
+                except Exception as e:
+                    failed_battles.append(url)
+                    logger.error(f"Error processing battle {url}: {str(e)}")
+                    continue
+    
+    except Exception as e:
+        logger.error(f"Critical error during processing: {str(e)}")
     
     end_time = time.time()
     processing_time = end_time - start_time
     
-    logger.warning(f"Processing completed in {processing_time:.2f} seconds")
-    logger.warning(f"Successfully processed {processed_battles} out of {len(battle_urls)} battles")
+    # Log detailed summary
+    logger.warning("\nProcessing Summary:")
+    logger.warning(f"Total time: {processing_time:.2f} seconds")
+    logger.warning(f"Successfully processed: {processed_battles}/{len(battle_urls)} battles")
     logger.warning(f"Average speed: {processed_battles/processing_time:.2f} battles/second")
+    logger.warning(f"Victories: {total_victories}")
+    logger.warning(f"Defeats: {total_defeats}")
+    
+    if failed_battles:
+        logger.warning("\nFailed Battles:")
+        for url in failed_battles:
+            logger.warning(f"- {url}")
     
     if all_battles_data:
         averages_data = calculate_averages(all_battles_data)
@@ -635,8 +801,19 @@ def main():
             'defeats': total_defeats,
             'win_rate': (total_victories / (total_victories + total_defeats) * 100) if total_victories + total_defeats > 0 else 0
         }
-        save_averages_to_excel(averages_data, "day 3.xlsx", battle_summary)
-        logger.warning("Results saved to Excel file")
+        
+        try:
+            save_averages_to_excel(averages_data, "day 3.xlsx", battle_summary)
+            logger.warning("\nResults saved to Excel file")
+        except Exception as e:
+            logger.error(f"Error saving to Excel: {str(e)}")
+            # Attempt to save as CSV as fallback
+            try:
+                csv_path = "day 3.csv"
+                pd.DataFrame(averages_data).to_csv(csv_path, index=False)
+                logger.warning(f"Results saved to CSV file: {csv_path}")
+            except Exception as e2:
+                logger.error(f"Error saving to CSV: {str(e2)}")
     else:
         logger.error("No battle data was extracted")
 
