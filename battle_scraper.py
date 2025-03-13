@@ -30,22 +30,20 @@ def setup_driver():
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
     
     try:
-        service = Service(ChromeDriverManager().install())
+        # Use the Chrome binary installed by build.sh
+        chrome_binary = "/opt/render/project/src/chrome/google-chrome"
+        chrome_options.binary_location = chrome_binary
+        
+        # Use the ChromeDriver installed by build.sh
+        chromedriver_path = "/opt/render/project/src/chrome/chromedriver"
+        service = Service(chromedriver_path)
+        
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.set_page_load_timeout(30)
         return driver
     except Exception as e:
         logger.error(f"Failed to create Chrome driver: {str(e)}")
-        # Fallback to direct ChromeDriver path for cloud environment
-        try:
-            chrome_options.binary_location = "/usr/bin/google-chrome"
-            service = Service("/usr/bin/chromedriver")
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            driver.set_page_load_timeout(30)
-            return driver
-        except Exception as e2:
-            logger.error(f"Failed to create Chrome driver with fallback: {str(e2)}")
-            raise
+        raise
 
 def extract_battle_data(driver, battle_url):
     logger.info(f"Accessing battle page: {battle_url}")
