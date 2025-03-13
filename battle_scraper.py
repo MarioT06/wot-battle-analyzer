@@ -202,10 +202,8 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
             # Clear any existing state
             try:
                 driver.delete_all_cookies()
-                driver.execute_script("window.localStorage.clear();")
-                driver.execute_script("window.sessionStorage.clear();")
             except Exception as e:
-                logger.warning(f"Failed to clear browser state: {str(e)}")
+                logger.warning(f"Failed to clear cookies: {str(e)}")
             
             # Test driver health before proceeding
             try:
@@ -220,6 +218,10 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
                 try:
                     logger.warning(f"Loading page (Attempt {load_attempt + 1}/{load_attempts})")
                     driver.get(battle_url)
+                    # Quick check for obvious errors
+                    if "404" in driver.title or "Error" in driver.title:
+                        logger.warning(f"Error page detected in title: {driver.title}")
+                        return None, []
                     break
                 except TimeoutException:
                     if load_attempt < load_attempts - 1:
@@ -231,27 +233,18 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
                     raise
             
             # Wait for result element with a more robust check
-            wait = WebDriverWait(driver, 30)  # Increased timeout
+            wait = WebDriverWait(driver, 15)  # Reduced timeout
             result_xpath = "//div[@result='win'] | //div[@result='loss']"
             
             # First check if page loaded at all
             try:
                 body = wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                logger.warning("Page body loaded successfully")
+                if "404" in body.text or "error" in body.text.lower():
+                    logger.warning("Error content detected in body text")
+                    return None, []
             except TimeoutException:
                 logger.warning("Timeout waiting for page body")
                 raise
-            
-            # Check for error indicators
-            try:
-                if "404" in driver.title or "Error" in driver.title:
-                    logger.warning(f"Error page detected: {driver.title}")
-                    return None, []
-                if "404" in driver.page_source or "error" in driver.page_source.lower():
-                    logger.warning("Error content detected in page source")
-                    return None, []
-            except Exception as e:
-                logger.warning(f"Error checking page content: {str(e)}")
             
             # Then check for specific elements
             try:
@@ -259,10 +252,7 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
                 logger.warning("Battle result element found")
             except TimeoutException:
                 logger.warning("Timeout waiting for battle result element")
-                if "404" in driver.title or "Error" in driver.title:
-                    logger.warning(f"Battle page not found or error: {battle_url}")
-                    return None, []
-                raise
+                return None, []
             
             is_victory = 'win' in result_element.get_attribute('result')
             logger.warning(f"Battle result: {'Victory' if is_victory else 'Defeat'}")
@@ -275,7 +265,7 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
                 logger.warning("Battle data table found and visible")
             except TimeoutException:
                 logger.warning("Timeout waiting for battle data table")
-                raise
+                return None, []
             
             rows = table.find_elements(By.TAG_NAME, "tr")[1:]
             logger.warning(f"Found {len(rows)} player rows in table")
@@ -302,7 +292,6 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
                     
                     if stats['Name'] and stats['Tank']:
                         battle_data.append(stats)
-                        logger.warning(f"Processed player: {stats['Name']} in {stats['Tank']}")
                     else:
                         logger.warning(f"Row {row_index} missing required data: Name={bool(stats['Name'])}, Tank={bool(stats['Tank'])}")
                     
@@ -315,7 +304,7 @@ def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
                 return is_victory, battle_data
             else:
                 logger.warning("No valid battle data found in table")
-                raise Exception("No valid battle data found in table")
+                return None, []
             
         except (WebDriverException, TimeoutException) as e:
             if attempt < max_retries - 1:
