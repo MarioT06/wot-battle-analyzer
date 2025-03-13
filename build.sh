@@ -1,70 +1,73 @@
 #!/bin/bash
 
 # Create chrome directory
-mkdir -p /opt/render/project/src/chrome
-cd /opt/render/project/src/chrome
+CHROME_DIR="/opt/render/project/src/chrome"
+mkdir -p "$CHROME_DIR"
+cd "$CHROME_DIR"
 
-# Install Chrome dependencies without requiring root
-echo "Installing Chrome dependencies..."
-pip install wget
-python3 -m wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+echo "Current directory: $(pwd)"
+echo "Contents before installation:"
+ls -la
 
-# Extract Chrome from deb package
+# Download Chrome package
+echo "Downloading Chrome..."
+curl -o chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+
+# Extract Chrome
 echo "Extracting Chrome..."
-mkdir -p chrome-tmp
-cd chrome-tmp
-ar x ../google-chrome-stable_current_amd64.deb
+ar x chrome.deb
 tar xf data.tar.xz
-cd ..
 
-# Move Chrome files to the correct location
+# Move Chrome binary to the correct location
 echo "Setting up Chrome..."
-mv chrome-tmp/usr/bin/google-chrome-stable .
-mv chrome-tmp/usr/share/chrome* . 2>/dev/null || true
-mv chrome-tmp/usr/share/google-chrome . 2>/dev/null || true
+mv usr/bin/google-chrome-stable .
+mv usr/share/chrome* . 2>/dev/null || true
+mv usr/share/google-chrome . 2>/dev/null || true
 
-# Create necessary symlinks
+# Create symlink
 echo "Creating symlinks..."
-ln -sf ${PWD}/google-chrome-stable ${PWD}/google-chrome
+ln -sf "${PWD}/google-chrome-stable" "${PWD}/google-chrome"
+
+# Set permissions
+echo "Setting permissions..."
+chmod +x google-chrome-stable
+chmod +x google-chrome
 
 # Get Chrome version
 CHROME_VERSION=$(./google-chrome-stable --version 2>/dev/null | cut -d ' ' -f 3)
 echo "Chrome version: $CHROME_VERSION"
 
-# Download matching ChromeDriver
+# Download ChromeDriver
 echo "Downloading ChromeDriver..."
-CHROMEDRIVER_VERSION=$(wget -qO- https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
+CHROMEDRIVER_VERSION=$(curl -s https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
 echo "ChromeDriver version: $CHROMEDRIVER_VERSION"
-wget "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
-unzip chromedriver_linux64.zip
+curl -L -o chromedriver.zip "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
+unzip chromedriver.zip
 chmod +x chromedriver
+
+# Clean up
+echo "Cleaning up..."
+rm -rf usr/ chrome.deb data.tar.* control.tar.* debian-binary chromedriver.zip
 
 # Print debug information
 echo "Debug information:"
 echo "Chrome binary locations:"
-ls -la ${PWD}/google-chrome*
-file ${PWD}/google-chrome-stable
+ls -la google-chrome*
+file google-chrome-stable
 
 echo "Chrome version check:"
-${PWD}/google-chrome-stable --version || echo "Failed to get Chrome version"
-${PWD}/google-chrome --version || echo "Failed to get Chrome version"
+./google-chrome-stable --version || echo "Failed to get Chrome version"
+./google-chrome --version || echo "Failed to get Chrome version"
 
 echo "ChromeDriver version check:"
 ./chromedriver --version || echo "Failed to get ChromeDriver version"
 
-# Clean up
-rm -rf chrome-tmp google-chrome-stable_current_amd64.deb chromedriver_linux64.zip
+echo "Contents after installation:"
+ls -la
 
-# Make Chrome and ChromeDriver available in PATH
-export PATH="${PWD}:${PATH}"
+# Create a file to indicate successful installation
+touch .chrome_installed
 
-# Final verification
-echo "Final PATH: $PATH"
-echo "Final verification:"
-which google-chrome || echo "google-chrome not found in PATH"
-which google-chrome-stable || echo "google-chrome-stable not found in PATH"
-which chromedriver || echo "chromedriver not found in PATH"
-
-# List all files in chrome directory
-echo "Contents of ${PWD}:"
-ls -la 
+# Export the Chrome directory path
+echo "export CHROME_DIR=${CHROME_DIR}" >> $HOME/.bashrc
+echo "export PATH=${CHROME_DIR}:$PATH" >> $HOME/.bashrc 

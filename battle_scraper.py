@@ -34,12 +34,28 @@ def setup_driver():
     try:
         # Try to find Chrome binary
         chrome_binary = None
-        chrome_dir = "/opt/render/project/src/chrome"
+        chrome_dir = os.getenv('CHROME_DIR', '/opt/render/project/src/chrome')
+        logger.info(f"Looking for Chrome in: {chrome_dir}")
+        
+        # Check if Chrome is installed
+        chrome_installed = os.path.exists(os.path.join(chrome_dir, '.chrome_installed'))
+        if not chrome_installed:
+            logger.error("Chrome installation marker not found. Chrome may not be installed correctly.")
+            
+        # List directory contents
+        try:
+            logger.info(f"Contents of {chrome_dir}:")
+            for item in os.listdir(chrome_dir):
+                item_path = os.path.join(chrome_dir, item)
+                logger.info(f"  {item}: {os.path.getsize(item_path)} bytes")
+        except Exception as e:
+            logger.error(f"Failed to list chrome directory contents: {str(e)}")
+        
         possible_paths = [
-            f"{chrome_dir}/google-chrome-stable",  # Our extracted Chrome binary
-            f"{chrome_dir}/google-chrome",         # Our symlink
-            "/usr/bin/google-chrome-stable",       # System Chrome (fallback)
-            "/usr/bin/google-chrome"               # System Chrome (fallback)
+            os.path.join(chrome_dir, 'google-chrome-stable'),
+            os.path.join(chrome_dir, 'google-chrome'),
+            "/usr/bin/google-chrome-stable",  # fallback
+            "/usr/bin/google-chrome"          # fallback
         ]
         
         # Try possible paths
@@ -63,19 +79,10 @@ def setup_driver():
                 logger.info(f"Chrome not found at: {path}")
         
         if not chrome_binary:
-            # List contents of chrome directory for debugging
-            logger.error("Chrome binary not found in any known location")
-            try:
-                logger.info(f"Contents of {chrome_dir}:")
-                for item in os.listdir(chrome_dir):
-                    item_path = os.path.join(chrome_dir, item)
-                    logger.info(f"  {item}: {os.path.getsize(item_path)} bytes")
-            except Exception as e:
-                logger.error(f"Failed to list chrome directory contents: {str(e)}")
             raise FileNotFoundError("Chrome binary not found in any known location")
             
         # Set up ChromeDriver
-        chromedriver_path = f"{chrome_dir}/chromedriver"
+        chromedriver_path = os.path.join(chrome_dir, 'chromedriver')
         if not os.path.exists(chromedriver_path):
             logger.error(f"ChromeDriver not found at {chromedriver_path}")
             raise FileNotFoundError(f"ChromeDriver not found at {chromedriver_path}")
@@ -92,6 +99,9 @@ def setup_driver():
         
         chrome_options.binary_location = chrome_binary
         service = Service(executable_path=chromedriver_path)
+        
+        # Add Chrome binary directory to PATH
+        os.environ['PATH'] = f"{chrome_dir}:{os.environ.get('PATH', '')}"
         
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.set_page_load_timeout(30)
