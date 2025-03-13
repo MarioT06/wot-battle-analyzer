@@ -21,17 +21,31 @@ def setup_driver():
     chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--ignore-certificate-errors')
-    chrome_options.add_argument('--ignore-ssl-errors')
     chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--log-level=3')  # Only show fatal errors
-    chrome_options.add_argument('--window-size=1920,1080')  # Set a large window size
+    chrome_options.add_argument('--disable-software-rasterizer')
+    chrome_options.add_argument('--remote-debugging-port=9222')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--disable-setuid-sandbox')
+    chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
     
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    driver.set_page_load_timeout(30)
-    return driver
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(30)
+        return driver
+    except Exception as e:
+        logger.error(f"Failed to create Chrome driver: {str(e)}")
+        # Fallback to direct ChromeDriver path for cloud environment
+        try:
+            chrome_options.binary_location = "/usr/bin/google-chrome"
+            service = Service("/usr/bin/chromedriver")
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            driver.set_page_load_timeout(30)
+            return driver
+        except Exception as e2:
+            logger.error(f"Failed to create Chrome driver with fallback: {str(e2)}")
+            raise
 
 def extract_battle_data(driver, battle_url):
     logger.info(f"Accessing battle page: {battle_url}")
