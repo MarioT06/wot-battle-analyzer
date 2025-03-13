@@ -4,7 +4,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import WebDriverException, TimeoutException
 import pandas as pd
 import time
 import logging
@@ -14,6 +14,7 @@ import concurrent.futures
 import random
 from concurrent.futures import ThreadPoolExecutor
 import queue
+from contextlib import contextmanager
 
 # Set up logging - reduce logging to speed up processing
 logging.basicConfig(level=logging.WARNING)
@@ -21,8 +22,24 @@ logger = logging.getLogger(__name__)
 
 # Global rate limiting queue - increased limit for faster processing
 request_queue = queue.Queue()
-MAX_REQUESTS_PER_MINUTE = 60  # Doubled from 30
+MAX_REQUESTS_PER_MINUTE = 60
 DELAY_BETWEEN_REQUESTS = 60 / MAX_REQUESTS_PER_MINUTE
+MAX_RETRIES = 3
+RETRY_DELAY = 5
+
+@contextmanager
+def create_driver():
+    """Context manager for creating and properly closing Chrome driver"""
+    driver = None
+    try:
+        driver = setup_driver()
+        yield driver
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
 def rate_limit():
     """Implement rate limiting for requests"""
@@ -38,8 +55,9 @@ def rate_limit():
         time.sleep(DELAY_BETWEEN_REQUESTS)
 
 def setup_driver():
+    """Set up Chrome driver with optimized settings"""
     chrome_options = Options()
-    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--headless=new')  # Use new headless mode
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
@@ -47,6 +65,7 @@ def setup_driver():
     chrome_options.add_argument('--disable-extensions')
     chrome_options.add_argument('--disable-setuid-sandbox')
     chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--remote-debugging-port=0')  # Use random debugging port
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
     
     try:
@@ -73,58 +92,73 @@ def setup_driver():
         service = Service(executable_path=chromedriver_path)
         
         driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(15)  # Reduced from 30
+        driver.set_page_load_timeout(15)
         return driver
     except Exception as e:
         logger.error(f"Failed to create Chrome driver: {str(e)}")
         raise
 
-def extract_battle_data(driver, battle_url):
-    try:
-        rate_limit()
-        driver.get(battle_url)
-        
-        # Reduced wait time and more specific wait condition
-        wait = WebDriverWait(driver, 10)  # Reduced from 30
-        result_xpath = "//div[@result='win'] | //div[@result='loss']"
-        result_element = wait.until(EC.presence_of_element_located((By.XPATH, result_xpath)))
-        
-        is_victory = 'win' in result_element.get_attribute('result')
-        
-        # Find table directly - simplified selector strategy
-        table = wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-        rows = table.find_elements(By.TAG_NAME, "tr")[1:]  # Skip header
-        
-        battle_data = []
-        for row in rows:
-            try:
-                cells = row.find_elements(By.TAG_NAME, "td")
-                if len(cells) < 10:
+def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
+    """Extract battle data with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            rate_limit()
+            driver.get(battle_url)
+            
+            wait = WebDriverWait(driver, 10)
+            result_xpath = "//div[@result='win'] | //div[@result='loss']"
+            result_element = wait.until(EC.presence_of_element_located((By.XPATH, result_xpath)))
+            
+            is_victory = 'win' in result_element.get_attribute('result')
+            
+            table = wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+            rows = table.find_elements(By.TAG_NAME, "tr")[1:]
+            
+            battle_data = []
+            for row in rows:
+                try:
+                    cells = row.find_elements(By.TAG_NAME, "td")
+                    if len(cells) < 10:
+                        continue
+                    
+                    stats = {
+                        'Name': cells[2].text.strip(),
+                        'Tank': cells[1].text.strip(),
+                        'Damage': ''.join(filter(str.isdigit, cells[3].text.strip())) or '0',
+                        'Frags': ''.join(filter(str.isdigit, cells[4].text.strip())) or '0',
+                        'Assist': ''.join(filter(str.isdigit, cells[5].text.strip())) or '0',
+                        'Spots': ''.join(filter(str.isdigit, cells[6].text.strip())) or '0',
+                        'Accuracy': cells[7].text.strip(),
+                        'Survival': cells[8].text.strip(),
+                        'XP': ''.join(filter(str.isdigit, cells[9].text.strip())) or '0'
+                    }
+                    
+                    if stats['Name'] and stats['Tank']:
+                        battle_data.append(stats)
+                    
+                except Exception:
                     continue
-                
-                stats = {
-                    'Name': cells[2].text.strip(),
-                    'Tank': cells[1].text.strip(),
-                    'Damage': ''.join(filter(str.isdigit, cells[3].text.strip())) or '0',
-                    'Frags': ''.join(filter(str.isdigit, cells[4].text.strip())) or '0',
-                    'Assist': ''.join(filter(str.isdigit, cells[5].text.strip())) or '0',
-                    'Spots': ''.join(filter(str.isdigit, cells[6].text.strip())) or '0',
-                    'Accuracy': cells[7].text.strip(),
-                    'Survival': cells[8].text.strip(),
-                    'XP': ''.join(filter(str.isdigit, cells[9].text.strip())) or '0'
-                }
-                
-                if stats['Name'] and stats['Tank']:
-                    battle_data.append(stats)
-                
-            except Exception:
-                continue
-        
-        return is_victory, battle_data
+            
+            if battle_data:  # Only return if we got data
+                return is_victory, battle_data
+            
+        except (WebDriverException, TimeoutException) as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Attempt {attempt + 1} failed for {battle_url}: {str(e)}")
+                time.sleep(RETRY_DELAY)  # Wait before retrying
+                try:
+                    driver.quit()  # Try to clean up the broken driver
+                except Exception:
+                    pass
+                driver = setup_driver()  # Create a fresh driver
+            else:
+                logger.error(f"All attempts failed for {battle_url}: {str(e)}")
+                return None, []
+        except Exception as e:
+            logger.error(f"Unexpected error processing {battle_url}: {str(e)}")
+            return None, []
     
-    except Exception as e:
-        logger.error(f"Error processing {battle_url}: {str(e)}")
-        return None, []
+    return None, []
 
 def save_to_excel(data, filename):
     if not data:
@@ -476,15 +510,14 @@ def save_averages_to_excel(averages_data, output_file, battle_summary=None):
         raise
 
 def process_battle_chunk(battle_urls_chunk):
-    """Process a chunk of battle URLs with its own Chrome instance"""
-    driver = setup_driver()
+    """Process a chunk of battle URLs with a single Chrome instance"""
     chunk_data = []
     chunk_victories = 0
     chunk_defeats = 0
     
-    try:
+    with create_driver() as driver:
         for url in battle_urls_chunk:
-            is_victory, battle_data = extract_battle_data(driver, url)
+            is_victory, battle_data = extract_battle_data_with_retry(driver, url)
             if battle_data:
                 chunk_data.append(battle_data)
                 if is_victory is not None:
@@ -492,8 +525,6 @@ def process_battle_chunk(battle_urls_chunk):
                         chunk_victories += 1
                     else:
                         chunk_defeats += 1
-    finally:
-        driver.quit()
     
     return chunk_data, chunk_victories, chunk_defeats
 
@@ -521,14 +552,15 @@ def main():
         "https://tomato.gg/battle/64391779236043210/512317641"
     ]
     
-    # Increased number of threads for faster processing
-    max_threads = min(os.cpu_count() or 1, 8)  # Increased from 4 to 8
+    # Use fewer threads but process more efficiently
+    max_threads = min(os.cpu_count() or 1, 4)  # Reduced from 8 to 4 for stability
     chunk_size = max(1, len(battle_urls) // max_threads)
     url_chunks = [battle_urls[i:i + chunk_size] for i in range(0, len(battle_urls), chunk_size)]
     
     all_battles_data = []
     total_victories = 0
     total_defeats = 0
+    processed_battles = 0
     
     start_time = time.time()
     logger.warning(f"Starting battle processing with {max_threads} threads")
@@ -542,6 +574,14 @@ def main():
                 all_battles_data.extend(chunk_data)
                 total_victories += chunk_victories
                 total_defeats += chunk_defeats
+                processed_battles += len(chunk_data)
+                
+                # Show progress
+                elapsed_time = time.time() - start_time
+                battles_per_second = processed_battles / elapsed_time if elapsed_time > 0 else 0
+                logger.warning(f"Processed {processed_battles}/{len(battle_urls)} battles. "
+                             f"Speed: {battles_per_second:.2f} battles/second")
+                
             except Exception as e:
                 logger.error(f"Error processing chunk: {str(e)}")
     
@@ -549,8 +589,8 @@ def main():
     processing_time = end_time - start_time
     
     logger.warning(f"Processing completed in {processing_time:.2f} seconds")
-    logger.warning(f"Processed {len(all_battles_data)} battles")
-    logger.warning(f"Speed: {len(all_battles_data)/processing_time:.2f} battles/second")
+    logger.warning(f"Successfully processed {processed_battles} out of {len(battle_urls)} battles")
+    logger.warning(f"Average speed: {processed_battles/processing_time:.2f} battles/second")
     
     if all_battles_data:
         averages_data = calculate_averages(all_battles_data)
