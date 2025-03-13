@@ -8,13 +8,16 @@ import os
 import json
 from datetime import datetime
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key'  # Change this in production
-socketio = SocketIO(app)
-
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key'
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins='*')
 
 # Queue for processing battles
 battle_queue = queue.Queue()
@@ -26,6 +29,7 @@ if not os.path.exists(ANALYSES_DIR):
 
 @app.route('/')
 def index():
+    logger.info("Accessing index page")
     return render_template('index.html')
 
 @app.route('/process', methods=['POST'])
@@ -195,5 +199,10 @@ def handle_disconnect():
     logger.info('Client disconnected')
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True) 
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"Starting application on port {port}")
+    socketio.run(app, 
+                host='0.0.0.0', 
+                port=port, 
+                debug=False,
+                use_reloader=False) 
