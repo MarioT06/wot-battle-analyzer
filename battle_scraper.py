@@ -15,10 +15,20 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 import queue
 from contextlib import contextmanager
+import urllib3
+
+# Configure urllib3 connection pooling
+urllib3.PoolManager(maxsize=10, retries=3)
 
 # Set up logging - reduce logging to speed up processing
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
+
+# Disable Selenium logging
+selenium_logger = logging.getLogger('selenium')
+selenium_logger.setLevel(logging.WARNING)
+urllib3_logger = logging.getLogger('urllib3')
+urllib3_logger.setLevel(logging.WARNING)
 
 # Global rate limiting queue - increased limit for faster processing
 request_queue = queue.Queue()
@@ -101,30 +111,37 @@ def setup_driver():
     chrome_options.add_argument('--mute-audio')
     chrome_options.add_argument('--no-default-browser-check')
     chrome_options.add_argument('--force-webrtc-ip-handling-policy=disable_non_proxied_udp')
+    chrome_options.add_argument('--disable-background-timer-throttling')
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-breakpad')
+    chrome_options.add_argument('--disable-component-extensions-with-background-pages')
+    chrome_options.add_argument('--disable-features=BackForwardCache')
+    chrome_options.add_argument('--disable-ipc-flooding-protection')
+    chrome_options.add_argument('--enable-features=NetworkService,NetworkServiceInProcess')
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
     chrome_options.add_experimental_option('detach', True)
     
     last_exception = None
     for port in ports:
         try:
-            # Log environment information
-            logger.warning(f"Current working directory: {os.getcwd()}")
-            logger.warning(f"PATH: {os.environ.get('PATH', '')}")
+            # Log environment information only once at startup
+            if port == ports[0]:
+                logger.warning(f"Current working directory: {os.getcwd()}")
+                logger.warning(f"PATH: {os.environ.get('PATH', '')}")
+                logger.warning(f"Chrome directory: {os.getenv('CHROME_DIR', '/opt/render/project/src/chrome')}")
             
             chrome_dir = os.getenv('CHROME_DIR', '/opt/render/project/src/chrome')
-            logger.warning(f"Chrome directory: {chrome_dir}")
-            
             possible_paths = [
                 os.path.join(chrome_dir, name) for name in 
                 ['chrome', 'google-chrome', 'google-chrome-stable']
             ]
             
-            # Log available Chrome binaries
-            for path in possible_paths:
-                if os.path.exists(path):
-                    logger.warning(f"Found Chrome binary at: {path}")
-                else:
-                    logger.warning(f"No Chrome binary at: {path}")
+            # Log Chrome binary information only once
+            if port == ports[0]:
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        logger.warning(f"Found Chrome binary at: {path}")
+                        logger.warning(f"Chrome binary permissions: {oct(os.stat(path).st_mode)[-3:]}")
             
             chrome_binary = next(
                 (path for path in possible_paths if os.path.exists(path)), 
@@ -138,9 +155,9 @@ def setup_driver():
             if not os.path.exists(chromedriver_path):
                 raise FileNotFoundError("ChromeDriver not found")
             
-            # Log binary permissions
-            logger.warning(f"Chrome binary permissions: {oct(os.stat(chrome_binary).st_mode)[-3:]}")
-            logger.warning(f"ChromeDriver permissions: {oct(os.stat(chromedriver_path).st_mode)[-3:]}")
+            # Log ChromeDriver permissions only once
+            if port == ports[0]:
+                logger.warning(f"ChromeDriver permissions: {oct(os.stat(chromedriver_path).st_mode)[-3:]}")
             
             # Ensure proper PATH setup
             os.environ['PATH'] = f"{chrome_dir}:{os.environ.get('PATH', '')}"
@@ -155,35 +172,22 @@ def setup_driver():
             
             # Create and configure driver with increased timeouts
             driver = webdriver.Chrome(service=service, options=chrome_options)
-            driver.set_page_load_timeout(30)  # Increased from 15 to 30 seconds
-            driver.command_executor.set_timeout(30)  # Set command timeout
+            driver.set_page_load_timeout(30)
+            driver.command_executor.set_timeout(30)
             
-            # Test the connection with retries
-            max_test_retries = 3
-            for test_attempt in range(max_test_retries):
-                try:
-                    driver.execute_script('return navigator.userAgent')
-                    break
-                except Exception as test_e:
-                    if test_attempt == max_test_retries - 1:
-                        raise
-                    logger.warning(f"Connection test attempt {test_attempt + 1} failed: {str(test_e)}")
-                    time.sleep(1)
-            
-            # If we get here, the connection is working
+            # Test the connection
+            driver.execute_script('return navigator.userAgent')
             logger.warning(f"Successfully connected to ChromeDriver on port {port}")
             return driver
             
         except Exception as e:
             last_exception = e
-            logger.warning(f"Failed to create Chrome driver on port {port}: {str(e)}")
-            try:
-                if 'driver' in locals():
+            if 'driver' in locals():
+                try:
                     driver.quit()
-            except:
-                pass
+                except:
+                    pass
             
-    # If we get here, all ports failed
     raise Exception(f"Failed to create Chrome driver on any port. Last error: {str(last_exception)}")
 
 def extract_battle_data_with_retry(driver, battle_url, max_retries=MAX_RETRIES):
