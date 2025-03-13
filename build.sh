@@ -11,30 +11,32 @@ ls -la
 
 # Install system dependencies
 echo "Installing system dependencies..."
-apt-get update
-apt-get install -y wget unzip fontconfig fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 libexpat1 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 xdg-utils
+sudo apt-get update || { echo "Failed to update apt"; exit 1; }
+sudo apt-get install -y wget unzip fontconfig fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 libexpat1 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 xdg-utils || { echo "Failed to install dependencies"; exit 1; }
 
-# Download and install Chrome
-echo "Downloading Chrome..."
-wget -q "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+# Add Google Chrome repository and key
+echo "Adding Google Chrome repository..."
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
 
-# Install Chrome package
-echo "Installing Chrome..."
-dpkg -i google-chrome-stable_current_amd64.deb || true
-apt-get install -f -y
+# Update package list and install Chrome
+echo "Updating package list and installing Chrome..."
+sudo apt-get update || { echo "Failed to update apt after adding Chrome repo"; exit 1; }
+sudo apt-get install -y google-chrome-stable || { echo "Failed to install Chrome"; exit 1; }
 
 # Create symlinks to the installed Chrome
 echo "Creating symlinks..."
-ln -sf /usr/bin/google-chrome-stable "${PWD}/google-chrome-stable"
-ln -sf /usr/bin/google-chrome-stable "${PWD}/google-chrome"
+sudo ln -sf /usr/bin/google-chrome-stable "${PWD}/google-chrome-stable"
+sudo ln -sf /usr/bin/google-chrome-stable "${PWD}/google-chrome"
 
 # Set permissions
 echo "Setting permissions..."
-chmod +x "${PWD}/google-chrome-stable"
-chmod +x "${PWD}/google-chrome"
+sudo chmod +x "${PWD}/google-chrome-stable"
+sudo chmod +x "${PWD}/google-chrome"
+sudo chmod 755 "${PWD}"
 
 # Get Chrome version
-CHROME_VERSION=$(google-chrome-stable --version | cut -d ' ' -f 3)
+CHROME_VERSION=$(google-chrome-stable --version 2>/dev/null || /usr/bin/google-chrome-stable --version)
 echo "Chrome version: $CHROME_VERSION"
 
 # Download ChromeDriver
@@ -45,25 +47,26 @@ curl -L -o chromedriver.zip "https://chromedriver.storage.googleapis.com/${CHROM
 unzip chromedriver.zip
 chmod +x chromedriver
 
-# Clean up
-echo "Cleaning up..."
-rm -f google-chrome-stable_current_amd64.deb chromedriver.zip
-
 # Print debug information
 echo "Debug information:"
 echo "Chrome binary locations:"
-ls -la google-chrome*
-file google-chrome-stable
-which google-chrome-stable
+ls -la /usr/bin/google-chrome* || echo "No Chrome binaries in /usr/bin"
+ls -la "${PWD}/google-chrome*" || echo "No Chrome binaries in ${PWD}"
+file /usr/bin/google-chrome-stable || echo "Could not inspect Chrome binary"
+which google-chrome-stable || echo "Chrome not in PATH"
 
 echo "Chrome version check:"
-google-chrome-stable --version || echo "Failed to get Chrome version"
-./google-chrome --version || echo "Failed to get Chrome version"
+/usr/bin/google-chrome-stable --version --no-sandbox || echo "Failed to get Chrome version from /usr/bin"
+"${PWD}/google-chrome" --version --no-sandbox || echo "Failed to get Chrome version from symlink"
 
 echo "ChromeDriver version check:"
 ./chromedriver --version || echo "Failed to get ChromeDriver version"
 
-echo "Contents after installation:"
+echo "Contents of important directories:"
+echo "/usr/bin contents:"
+ls -la /usr/bin/google-chrome* || echo "No Chrome files in /usr/bin"
+echo
+echo "Current directory contents:"
 ls -la
 
 # Create a file to indicate successful installation
@@ -71,8 +74,17 @@ touch .chrome_installed
 
 # Export the Chrome directory path
 echo "export CHROME_DIR=${CHROME_DIR}" >> $HOME/.bashrc
-echo "export PATH=${CHROME_DIR}:$PATH" >> $HOME/.bashrc
+echo "export PATH=/usr/bin:${CHROME_DIR}:$PATH" >> $HOME/.bashrc
 
-# Verify Chrome can start
+# Verify Chrome installation
 echo "Testing Chrome..."
-timeout 10s google-chrome-stable --version --no-sandbox --headless || echo "Chrome test failed" 
+/usr/bin/google-chrome-stable --version --no-sandbox --headless || echo "Chrome test failed from /usr/bin"
+"${PWD}/google-chrome" --version --no-sandbox --headless || echo "Chrome test failed from symlink"
+
+# Print final status
+if [ -x /usr/bin/google-chrome-stable ] && [ -x "${PWD}/chromedriver" ]; then
+    echo "Installation completed successfully"
+else
+    echo "Installation may have failed"
+    exit 1
+fi 
