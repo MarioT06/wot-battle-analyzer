@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
-from battle_scraper import setup_driver, extract_battle_data, calculate_averages, save_averages_to_excel
+from battle_scraper import setup_driver, extract_battle_data_with_retry, calculate_averages, save_averages_to_excel, create_driver
 import threading
 import queue
 import logging
@@ -88,107 +88,102 @@ def get_previous_analyses():
 
 def process_battle_urls(urls):
     logger.info(f"Starting to process {len(urls)} battle URLs")
-    driver = None
     all_battles_data = []
     victories = 0
     defeats = 0
     
     try:
-        driver = setup_driver()
-        logger.info("WebDriver setup complete")
-        
-        total_battles = len(urls)
-        for i, url in enumerate(urls, 1):
-            try:
-                # Emit progress update
-                progress = (i / total_battles) * 100
-                logger.info(f"Processing battle {i}/{total_battles}: {url}")
-                socketio.emit('progress', {
-                    'current': i,
-                    'total': total_battles,
-                    'percentage': progress,
-                    'url': url
-                }, namespace='/')
-                
-                is_victory, battle_data = extract_battle_data(driver, url)
-                if battle_data:
-                    all_battles_data.append(battle_data)
-                    if is_victory is not None:
-                        if is_victory:
-                            victories += 1
-                        else:
-                            defeats += 1
-                    
-                    # Emit battle result with full stats
-                    logger.info(f"Battle {i} processed successfully")
-                    socketio.emit('battle_processed', {
-                        'url': url,
-                        'result': 'Victory' if is_victory else 'Defeat' if is_victory is not None else 'Unknown',
-                        'stats': battle_data
+        with create_driver() as driver:
+            logger.info("WebDriver setup complete")
+            
+            total_battles = len(urls)
+            for i, url in enumerate(urls, 1):
+                try:
+                    # Emit progress update
+                    progress = (i / total_battles) * 100
+                    logger.info(f"Processing battle {i}/{total_battles}: {url}")
+                    socketio.emit('progress', {
+                        'current': i,
+                        'total': total_battles,
+                        'percentage': progress,
+                        'url': url
                     }, namespace='/')
-                else:
-                    logger.warning(f"No data extracted for battle {i}: {url}")
+                    
+                    is_victory, battle_data = extract_battle_data_with_retry(driver, url)
+                    if battle_data:
+                        all_battles_data.append(battle_data)
+                        if is_victory is not None:
+                            if is_victory:
+                                victories += 1
+                            else:
+                                defeats += 1
+                        
+                        # Emit battle result with full stats
+                        logger.info(f"Battle {i} processed successfully")
+                        socketio.emit('battle_processed', {
+                            'url': url,
+                            'result': 'Victory' if is_victory else 'Defeat' if is_victory is not None else 'Unknown',
+                            'stats': battle_data
+                        }, namespace='/')
+                    else:
+                        logger.warning(f"No data extracted for battle {i}: {url}")
+                        socketio.emit('battle_processed', {
+                            'url': url,
+                            'result': 'Unknown',
+                            'stats': []
+                        }, namespace='/')
+                    
+                except Exception as e:
+                    logger.error(f"Error processing battle {i}: {str(e)}")
                     socketio.emit('battle_processed', {
                         'url': url,
-                        'result': 'Unknown',
+                        'result': 'Error',
                         'stats': []
                     }, namespace='/')
-                    
-            except Exception as e:
-                logger.error(f"Error processing battle {i}: {str(e)}")
-                socketio.emit('battle_processed', {
-                    'url': url,
-                    'result': 'Error',
-                    'stats': []
+            
+            if all_battles_data:
+                logger.info("Processing complete, calculating averages")
+                # Calculate averages
+                averages_data = calculate_averages(all_battles_data)
+                
+                # Add battle summary to averages data
+                battle_summary = {
+                    'victories': victories,
+                    'defeats': defeats,
+                    'total_battles': len(all_battles_data),
+                    'win_rate': (victories / (victories + defeats) * 100) if victories + defeats > 0 else 0
+                }
+                
+                # Generate unique filename with timestamp
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                excel_filename = f"battle_stats_{timestamp}.xlsx"
+                excel_path = os.path.join(ANALYSES_DIR, excel_filename)
+                
+                # Save averages Excel file with battle summary
+                logger.info(f"Saving averages to {excel_path}")
+                save_averages_to_excel(averages_data, excel_path, battle_summary)
+                
+                # Emit final results with averages
+                logger.info("Emitting final results")
+                socketio.emit('processing_complete', {
+                    'victories': victories,
+                    'defeats': defeats,
+                    'total_battles': len(all_battles_data),
+                    'win_rate': (victories / (victories + defeats) * 100) if victories + defeats > 0 else 0,
+                    'averages': averages_data,
+                    'excel_file': excel_filename  # This is now the correct filename
                 }, namespace='/')
-        
-        if all_battles_data:
-            logger.info("Processing complete, calculating averages")
-            # Calculate averages
-            averages_data = calculate_averages(all_battles_data)
-            
-            # Add battle summary to averages data
-            battle_summary = {
-                'victories': victories,
-                'defeats': defeats,
-                'total_battles': len(all_battles_data),
-                'win_rate': (victories / (victories + defeats) * 100) if victories + defeats > 0 else 0
-            }
-            
-            # Generate unique filename with timestamp
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            excel_filename = f"battle_stats_{timestamp}.xlsx"
-            excel_path = os.path.join(ANALYSES_DIR, excel_filename)
-            
-            # Save averages Excel file with battle summary
-            logger.info(f"Saving averages to {excel_path}")
-            save_averages_to_excel(averages_data, excel_path, battle_summary)
-            
-            # Emit final results with averages
-            logger.info("Emitting final results")
-            socketio.emit('processing_complete', {
-                'victories': victories,
-                'defeats': defeats,
-                'total_battles': len(all_battles_data),
-                'win_rate': (victories / (victories + defeats) * 100) if victories + defeats > 0 else 0,
-                'averages': averages_data,
-                'excel_file': excel_filename  # This is now the correct filename
-            }, namespace='/')
-        else:
-            logger.error("No battle data was extracted from any battle")
-            socketio.emit('processing_error', {
-                'message': 'No battle data was extracted from any battle'
-            }, namespace='/')
+            else:
+                logger.error("No battle data was extracted from any battle")
+                socketio.emit('processing_error', {
+                    'message': 'No battle data was extracted from any battle'
+                }, namespace='/')
             
     except Exception as e:
         logger.error(f"Error processing battles: {str(e)}")
         socketio.emit('processing_error', {
             'message': f'Error processing battles: {str(e)}'
         }, namespace='/')
-    finally:
-        if driver:
-            driver.quit()
-            logger.info("WebDriver closed")
 
 @socketio.on('connect')
 def handle_connect():
