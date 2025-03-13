@@ -3,7 +3,7 @@ services:
     name: wot-battle-analyzer
     env: python
     buildCommand: chmod +x build.sh && ./build.sh && pip install -r requirements.txt
-    startCommand: python -m gunicorn app:app --config gunicorn.conf.py --worker-class eventlet --log-level debug --preload
+    startCommand: gunicorn --worker-class eventlet wsgi:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.0
@@ -17,7 +17,7 @@ services:
         value: "production"
       - key: FLASK_APP
         value: "app.py"
-      - key: GUNICORN_CMD_ARGS
-        value: "--timeout 300 --keep-alive 2 --log-level debug"
+      - key: PORT
+        value: "10000"
     healthCheckPath: /
     autoDeploy: true 

@@ -201,14 +201,9 @@ def handle_disconnect():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     logger.info(f"Starting application on port {port}")
-    # Only use socketio.run in development
-    if os.environ.get('FLASK_ENV') == 'development':
-        socketio.run(app, 
-                    host='0.0.0.0', 
-                    port=port,
-                    debug=False,
-                    use_reloader=False,
-                    log_output=True)
-    else:
-        # In production, let Gunicorn handle the serving
-        app.run(host='0.0.0.0', port=port) 
+    socketio.run(app, 
+                host='0.0.0.0', 
+                port=port,
+                debug=False,
+                use_reloader=False,
+                log_output=True) 
