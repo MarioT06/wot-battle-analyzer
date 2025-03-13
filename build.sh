@@ -4,20 +4,26 @@
 mkdir -p /opt/render/project/src/chrome
 cd /opt/render/project/src/chrome
 
-# Install Chrome
-curl -O https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-apt-get update && apt-get install -y ./google-chrome-stable_current_amd64.deb
+# Install Chrome dependencies
+sudo apt-get update
+sudo apt-get install -y wget unzip xvfb libxi6 libgconf-2-4 default-jdk
 
-# Get Chrome version
+# Download and install Chrome
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+
+# Get Chrome version and install matching ChromeDriver
 CHROME_VERSION=$(google-chrome --version | cut -d ' ' -f 3)
 echo "Chrome version: $CHROME_VERSION"
 
-# Install matching ChromeDriver
-CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION%%.*}")
-echo "Installing ChromeDriver version: $CHROMEDRIVER_VERSION"
+# Extract major version
+CHROME_MAJOR_VERSION=$(echo "$CHROME_VERSION" | cut -d. -f1)
+echo "Chrome major version: $CHROME_MAJOR_VERSION"
 
-curl -Lo chromedriver.zip "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
-unzip chromedriver.zip
+# Download matching ChromeDriver
+wget "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/$CHROME_VERSION/linux64/chromedriver-linux64.zip"
+unzip chromedriver-linux64.zip
+mv chromedriver-linux64/chromedriver .
 chmod +x chromedriver
 
 # Verify installations
@@ -27,7 +33,7 @@ echo "ChromeDriver version:"
 ./chromedriver --version
 
 # Clean up
-rm google-chrome-stable_current_amd64.deb chromedriver.zip
+rm -rf chromedriver-linux64 chromedriver-linux64.zip google-chrome-stable_current_amd64.deb
 
-# Export path
+# Make Chrome and ChromeDriver available in PATH
 export PATH="/opt/render/project/src/chrome:$PATH" 

@@ -16,7 +16,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def setup_driver():
+    logger.info("Setting up Chrome driver...")
     chrome_options = Options()
+    
     # Enable headless mode
     chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
@@ -32,14 +34,27 @@ def setup_driver():
     try:
         # Use the Chrome binary installed by build.sh
         chrome_binary = "/opt/render/project/src/chrome/google-chrome"
-        chrome_options.binary_location = chrome_binary
-        
-        # Use the ChromeDriver installed by build.sh
         chromedriver_path = "/opt/render/project/src/chrome/chromedriver"
-        service = Service(chromedriver_path)
+        
+        logger.info(f"Chrome binary path: {chrome_binary}")
+        logger.info(f"ChromeDriver path: {chromedriver_path}")
+        
+        # Check if Chrome binary exists
+        if not os.path.exists(chrome_binary):
+            logger.error(f"Chrome binary not found at {chrome_binary}")
+            raise FileNotFoundError(f"Chrome binary not found at {chrome_binary}")
+            
+        # Check if ChromeDriver exists
+        if not os.path.exists(chromedriver_path):
+            logger.error(f"ChromeDriver not found at {chromedriver_path}")
+            raise FileNotFoundError(f"ChromeDriver not found at {chromedriver_path}")
+        
+        chrome_options.binary_location = chrome_binary
+        service = Service(executable_path=chromedriver_path)
         
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.set_page_load_timeout(30)
+        logger.info("Chrome driver setup successful")
         return driver
     except Exception as e:
         logger.error(f"Failed to create Chrome driver: {str(e)}")
